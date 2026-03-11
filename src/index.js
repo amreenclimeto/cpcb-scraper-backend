@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import pool from "./config/db.config.js";
+import scrapeRoutes from "./routes/scrape.routes.js";
 
 dotenv.config();
 
@@ -12,6 +13,7 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
 
+app.use("/api", scrapeRoutes);
 //test route
 app.get("/", async (req, res) => {
   try {

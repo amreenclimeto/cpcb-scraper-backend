@@ -2,11 +2,11 @@
   "name": "cpcb-scraper-bac",
   "version": "1.0.0",
   "description": "cpcb scraper backend",
-  "type":"module",
+  "type": "module",
   "main": "index.js",
   "scripts": {
-    "dev":"nodemon src/index.js",
-    "start":"nodemon src/index.js",
+    "dev": "nodemon src/index.js",
+    "start": "nodemon src/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -22,11 +22,14 @@
   "homepage": "https://github.com/amreenclimeto/cpcb-sacraper-backend#readme",
   "dependencies": {
     "axios": "^1.13.6",
+    "bullmq": "^5.70.4",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "ioredis": "^5.10.0",
     "node-cron": "^4.2.1",
     "pg": "^8.20.0",
+    "playwright": "^1.58.2",
     "winston": "^3.19.0",
     "zod": "^4.3.6"
   },
