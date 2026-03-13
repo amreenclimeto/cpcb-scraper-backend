@@ -3,7 +3,8 @@ import cors from "cors";
 import dotenv from "dotenv";
 import pool from "./config/db.config.js";
 import scrapeRoutes from "./routes/scrape.routes.js";
-
+import { startBatteryScrapeJob } from "./workers/Batteryscrape.job.js";
+import "./workers/cron.js";
 dotenv.config();
 
 const app = express();
@@ -14,6 +15,10 @@ app.use(express.json());
 const PORT = process.env.PORT || 5000;
 
 app.use("/api", scrapeRoutes);
+
+// Cron start
+startBatteryScrapeJob();
+
 //test route
 app.get("/", async (req, res) => {
   try {
