@@ -5,6 +5,8 @@ import pool from "./config/db.config.js";
 import scrapeRoutes from "./routes/scrape.routes.js";
 import { startBatteryScrapeJob } from "./workers/Batteryscrape.job.js";
 import "./workers/cron.js";
+import { startNationalWorker } from "./queue/national.worker.js"; // ✅ queue.js → worker.js
+
 dotenv.config();
 
 const app = express();
@@ -16,10 +18,9 @@ const PORT = process.env.PORT || 5000;
 
 app.use("/api", scrapeRoutes);
 
-// Cron start
+startNationalWorker();
 startBatteryScrapeJob();
 
-//test route
 app.get("/", async (req, res) => {
   try {
     const result = await pool.query("SELECT NOW()");
