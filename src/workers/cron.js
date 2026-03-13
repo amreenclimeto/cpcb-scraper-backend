@@ -1,17 +1,25 @@
 import cron from "node-cron";
 import fetchNationalDashboard from "../scraper/eprNational.scraper.js";
-import { saveScrapedData } from "../services/eprNational.service.js";
+import { saveScrapedData, getLatestCreatedOn } from "../services/eprNational.service.js"; // ✅
 
 cron.schedule("0 * * * *", async () => {
+  console.log("🕐 Running CPCB national scrape...");
 
-  console.log("Running CPCB scrape...");
+  const lastCreatedOn = await getLatestCreatedOn(); // ✅
+  console.log("📅 Scraping after:", lastCreatedOn);
 
-  const result = await fetchNationalDashboard();
+  const result = await fetchNationalDashboard(lastCreatedOn); // ✅
 
-  if (!result.success) return;
+  if (!result.success) {
+    console.log("❌ Scrape failed:", result.error);
+    return;
+  }
+
+  if (result.rows.length === 0) {
+    console.log("✅ No new records found");
+    return;
+  }
 
   const stats = await saveScrapedData(result.rows);
-
-  console.log("Scrape result:", stats);
-
+  console.log("✅ Scrape done:", stats);
 });

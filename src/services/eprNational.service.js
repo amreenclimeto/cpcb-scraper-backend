@@ -1,28 +1,24 @@
 import pool from "../config/db.config.js";
 
-
 /* SAVE SCRAPED DATA */
 
 export async function saveScrapedData(rows) {
-
   const client = await pool.connect();
 
   try {
-
     await client.query("BEGIN");
 
     const existing = await client.query(
-      `SELECT reg_id, status FROM plasticwastemanagement`
+      `SELECT reg_id, status FROM plasticwastemanagement`,
     );
 
     const existingMap = new Map();
-    existing.rows.forEach(r => existingMap.set(r.reg_id, r.status));
+    existing.rows.forEach((r) => existingMap.set(r.reg_id, r.status));
 
     let newUsers = 0;
     let statusChanges = 0;
 
     for (const row of rows) {
-
       const oldStatus = existingMap.get(row.reg_id);
       const newStatus = row.status;
 
@@ -31,7 +27,6 @@ export async function saveScrapedData(rows) {
       /* NEW USER */
 
       if (isNewUser) {
-
         newUsers++;
 
         await client.query(
@@ -57,8 +52,8 @@ export async function saveScrapedData(rows) {
             row.company_trade_name,
             row.applicant_type,
             row.status,
-            row.created_on
-          ]
+            row.created_on,
+          ],
         );
 
         await client.query(
@@ -67,15 +62,11 @@ export async function saveScrapedData(rows) {
           (reg_id, old_status, new_status)
           VALUES ($1,NULL,$2)
           `,
-          [row.reg_id, newStatus]
+          [row.reg_id, newStatus],
         );
-
-      }
+      } else if (oldStatus !== newStatus) {
 
       /* STATUS CHANGE */
-
-      else if (oldStatus !== newStatus) {
-
         statusChanges++;
 
         await client.query(
@@ -84,7 +75,7 @@ export async function saveScrapedData(rows) {
           (reg_id, old_status, new_status)
           VALUES ($1,$2,$3)
           `,
-          [row.reg_id, oldStatus, newStatus]
+          [row.reg_id, oldStatus, newStatus],
         );
 
         await client.query(
@@ -95,15 +86,11 @@ export async function saveScrapedData(rows) {
               synced_at=NOW()
           WHERE reg_id=$1
           `,
-          [row.reg_id, newStatus]
+          [row.reg_id, newStatus],
         );
-
-      }
+      } else {
 
       /* NO CHANGE */
-
-      else {
-
         await client.query(
           `
           UPDATE plasticwastemanagement
@@ -111,11 +98,9 @@ export async function saveScrapedData(rows) {
               synced_at=NOW()
           WHERE reg_id=$1
           `,
-          [row.reg_id]
+          [row.reg_id],
         );
-
       }
-
     }
 
     await client.query("COMMIT");
@@ -123,27 +108,19 @@ export async function saveScrapedData(rows) {
     return {
       newUsers,
       statusChanges,
-      total: rows.length
+      total: rows.length,
     };
-
   } catch (err) {
-
     await client.query("ROLLBACK");
     throw err;
-
   } finally {
-
     client.release();
-
   }
-
 }
-
 
 /* CURRENT DATA */
 
 export async function getCurrentDataService() {
-
   const { rows } = await pool.query(`
     SELECT *
     FROM plasticwastemanagement
@@ -151,32 +128,71 @@ export async function getCurrentDataService() {
   `);
 
   return rows;
-
 }
-
 
 /* NEW COMPANIES */
 
-export async function getNewCompaniesService(days) {
+/* NEW COMPANIES - cursor based */
+export async function getNewCompaniesService() {
+  const client = await pool.connect();
 
-  const { rows } = await pool.query(
-    `
-    SELECT *
-    FROM plasticwastemanagement
-    WHERE first_seen_at >= NOW() - INTERVAL '${days} days'
-    ORDER BY first_seen_at DESC
-    `
-  );
+  try {
+    await client.query("BEGIN");
 
-  return rows;
+    // Last cursor fetch karo
+    const cursorResult = await client.query(
+      `SELECT last_seen_at, last_total_count 
+       FROM sync_cursors 
+       WHERE cursor_key = 'epr_national_new_companies'`
+    );
 
+    const lastSeenAt = cursorResult.rows[0]?.last_seen_at ?? new Date(0);
+    const lastTotalCount = cursorResult.rows[0]?.last_total_count ?? 0;
+
+    // Current total
+    const countResult = await client.query(
+      `SELECT COUNT(*) as total FROM plasticwastemanagement`
+    );
+    const currentTotal = parseInt(countResult.rows[0].total);
+
+    // Naye records
+    const { rows } = await client.query(
+      `SELECT * FROM plasticwastemanagement
+       WHERE first_seen_at > $1
+       ORDER BY first_seen_at ASC`,
+      [lastSeenAt]
+    );
+
+    // Cursor update karo agar naye records mile
+    if (rows.length > 0) {
+      await client.query(
+        `UPDATE sync_cursors
+         SET last_seen_at = NOW(), last_total_count = $1
+         WHERE cursor_key = 'epr_national_new_companies'`,
+        [currentTotal]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    return {
+      previousTotal: lastTotalCount,
+      currentTotal,
+      newCount: rows.length,
+      data: rows,
+    };
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
-
 
 /* STATUS CHANGES */
 
 export async function getRecentStatusChangesService(days) {
-
   const { rows } = await pool.query(
     `
     SELECT
@@ -191,18 +207,15 @@ export async function getRecentStatusChangesService(days) {
     ON p.reg_id = h.reg_id
     WHERE h.changed_at >= NOW() - INTERVAL '${days} days'
     ORDER BY h.changed_at DESC
-    `
+    `,
   );
 
   return rows;
-
 }
-
 
 /* STATUS HISTORY */
 
 export async function getStatusHistoryService(regId) {
-
   const { rows } = await pool.query(
     `
     SELECT *
@@ -210,9 +223,16 @@ export async function getStatusHistoryService(regId) {
     WHERE reg_id=$1
     ORDER BY changed_at ASC
     `,
-    [regId]
+    [regId],
   );
 
   return rows;
+}
 
+// eprNational.service.js mein add karo
+export async function getLatestCreatedOn() {
+  const { rows } = await pool.query(
+    `SELECT MAX(created_on) as latest FROM plasticwastemanagement`
+  );
+  return rows[0]?.latest ?? null;
 }

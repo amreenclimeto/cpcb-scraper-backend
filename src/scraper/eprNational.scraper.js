@@ -5,12 +5,12 @@ import { getPage, closeBrowser } from "../playwright/browserManager.js";
  * @param {boolean} options.headless - Run in headless mode (default: false)
  * @returns {Promise<Object>} Scraping result with rows
  */
-async function fetchNationalDashboard() {
+async function fetchNationalDashboard(lastCreatedOn = null) {
   let browser;
   const ROWS = new Map();
   let TOTAL = 0;
   let page = null;
-
+ let shouldStop = false;
   try {
     // ✅ Get page with headless option
     const result = await getPage();
@@ -36,6 +36,12 @@ async function fetchNationalDashboard() {
 
           for (const row of data) {
             if (row.reg_id && !ROWS.has(row.reg_id)) {
+               // 🆕 Agar lastCreatedOn hai aur yeh record purana hai → STOP
+              if (lastCreatedOn && new Date(row.created_on) <= new Date(lastCreatedOn)) {
+                console.log("🛑 Purana record mila, scraping band karo");
+                shouldStop = true;
+                break;
+              }
               ROWS.set(row.reg_id, {
                 created_on: row.created_on,
                 company_legal_name: row.company_legal_name,
@@ -147,6 +153,13 @@ async function fetchNationalDashboard() {
         console.log("✅ All data collected");
         break;
       }
+
+       // 🆕 Stop if we hit old records
+      if (shouldStop) {
+        console.log("✅ Reached existing records, stopping early");
+        break;
+      }
+
 
       const nextBtn = page
         .locator("td.last-row button", { hasText: "Next" })
