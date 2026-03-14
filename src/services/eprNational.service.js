@@ -191,28 +191,34 @@ export async function getNewCompaniesService() {
 }
 
 /* STATUS CHANGES */
-
-export async function getRecentStatusChangesService(days) {
+export async function getRecentStatusChangesService() {
   const { rows } = await pool.query(
     `
     SELECT
       h.reg_id,
-      p.company_legal_name,
-      p.applicant_type,
       h.old_status,
       h.new_status,
-      h.changed_at
+      h.changed_at,
+
+      p.application_id,
+      p.company_legal_name,
+      p.company_trade_name,
+      p.applicant_type,
+      p.created_on,
+      p.first_seen_at
+
     FROM plastic_status_history h
-    JOIN plasticwastemanagement p
-    ON p.reg_id = h.reg_id
-    WHERE h.changed_at >= NOW() - INTERVAL '${days} days'
+    JOIN plasticwastemanagement p ON p.reg_id = h.reg_id
+
+    WHERE DATE(h.changed_at) = CURRENT_DATE
+    AND h.old_status IS NOT NULL
+
     ORDER BY h.changed_at DESC
     `,
   );
 
   return rows;
 }
-
 /* STATUS HISTORY */
 
 export async function getStatusHistoryService(regId) {
@@ -235,4 +241,11 @@ export async function getLatestCreatedOn() {
     `SELECT MAX(created_on) as latest FROM plasticwastemanagement`
   );
   return rows[0]?.latest ?? null;
+}
+
+export async function getTotalCount() {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*) as total FROM plasticwastemanagement`
+  );
+  return parseInt(rows[0].total);
 }

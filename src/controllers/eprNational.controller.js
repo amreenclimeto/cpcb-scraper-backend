@@ -78,10 +78,25 @@ export const getNewCompaniesController = async (req, res) => {
 // getRecentStatusChangesController — days optional rakho
 export const getRecentStatusChangesController = async (req, res) => {
   try {
-    const days = req.query.days || 7; // default 7 days
-    const data = await getRecentStatusChangesService(days);
+    const data = await getRecentStatusChangesService(); // no days
 
-    res.json({ status: "success", count: data.length, data });
+    res.json({
+      status: "success",
+      count: data.length,
+      date: new Date().toISOString(),
+      data: data.map((row) => ({
+        reg_id: row.reg_id,
+        application_id: row.application_id,
+        company_legal_name: row.company_legal_name,
+        company_trade_name: row.company_trade_name,
+        applicant_type: row.applicant_type,
+        date_of_application: row.created_on,
+        first_seen_at: row.first_seen_at,
+        old_status: row.old_status,
+        new_status: row.new_status,
+        changed_at: row.changed_at,
+      })),
+    });
   } catch (err) {
     res.status(500).json({ status: "error", message: err.message });
   }
