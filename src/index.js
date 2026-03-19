@@ -3,6 +3,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import pool from "./config/db.config.js";
 import scrapeRoutes from "./routes/scrape.routes.js";
+import scrapePiboRoutes from "./routes/pibo.routes.js";
 import { startBatteryScrapeJob } from "./workers/Batteryscrape.job.js";
 import "./workers/cron.js";
 import { startNationalWorker } from "./queue/national.worker.js"; // ✅ queue.js → worker.js
@@ -17,6 +18,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 5000;
 
 app.use("/api", scrapeRoutes);
+app.use("/api/pibo", scrapePiboRoutes);
 
 startNationalWorker();
 startBatteryScrapeJob();

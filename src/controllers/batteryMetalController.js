@@ -1,4 +1,4 @@
-import batteryProdMetalWiseDashboardLinks from "../scraper/batteryProdMetalWiseDashboard.scraper.js";
+import batteryProdMetalWiseDashboardLinks from "../scraper/batteryProdMetal.scraper.js";
 import scrapeMetalData, {
   sleep,
   DELAY_BETWEEN_METALS,

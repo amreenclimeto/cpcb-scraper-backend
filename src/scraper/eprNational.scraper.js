@@ -1,22 +1,22 @@
 import { getPage, closeBrowser } from "../playwright/browserManager.js";
-/**
- * Fetch EPR National Dashboard data
- * @param {Object} options - Scraping options
- * @param {boolean} options.headless - Run in headless mode (default: false)
- * @returns {Promise<Object>} Scraping result with rows
- */
-async function fetchNationalDashboard(lastCreatedOn = null) {
+import { getTotalCount } from "../services/eprNational.service.js";
+
+async function fetchNationalDashboard() {
   let browser;
   const ROWS = new Map();
   let TOTAL = 0;
   let page = null;
- let shouldStop = false;
+  let dbCount = 0;
+  let isSkipping = true; // 🆕 skip phase flag
+
   try {
-    // ✅ Get page with headless option
+    dbCount = await getTotalCount();
+    console.log("📦 DB count:", dbCount);
+
     const result = await getPage();
     browser = result.browser;
     page = result.page;
-    // 🔥 API Response Listener (captures data automatically in background)
+
     page.on("response", async (res) => {
       try {
         if (
@@ -28,20 +28,18 @@ async function fetchNationalDashboard(lastCreatedOn = null) {
 
           if (!TOTAL && json?.data?.all_application?.total_no) {
             TOTAL = json.data.all_application.total_no;
-            console.log("📊 TOTAL:", TOTAL);
+            console.log("📊 TOTAL on CPCB:", TOTAL);
+            console.log("🆕 New records expected:", TOTAL - dbCount);
           }
+
+          // 🆕 Skip phase mein collect mat karo
+          if (isSkipping) return;
 
           const data =
             json?.data?.all_application?.tableData?.bodyContent || [];
 
           for (const row of data) {
             if (row.reg_id && !ROWS.has(row.reg_id)) {
-               // 🆕 Agar lastCreatedOn hai aur yeh record purana hai → STOP
-              if (lastCreatedOn && new Date(row.created_on) <= new Date(lastCreatedOn)) {
-                console.log("🛑 Purana record mila, scraping band karo");
-                shouldStop = true;
-                break;
-              }
               ROWS.set(row.reg_id, {
                 created_on: row.created_on,
                 company_legal_name: row.company_legal_name,
@@ -54,15 +52,12 @@ async function fetchNationalDashboard(lastCreatedOn = null) {
             }
           }
 
-          console.log(`⚡ Collected: ${ROWS.size}/${TOTAL}`);
+          console.log(`⚡ Collected: ${ROWS.size}`);
         }
-      } catch (e) {
-        // Silent fail
-      }
+      } catch (e) {}
     });
 
-    // 1️⃣ Open dashboard
-    // 1️⃣ Open dashboard with retry and maintenance handling
+    // 1️⃣ Dashboard load
     const DASHBOARD_URL =
       "https://eprplastic.cpcb.gov.in/#/plastic/home/main_dashboard";
 
@@ -71,18 +66,13 @@ async function fetchNationalDashboard(lastCreatedOn = null) {
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         console.log(`🌐 Loading dashboard (attempt ${attempt})`);
-
         await page.goto(DASHBOARD_URL, {
           waitUntil: "networkidle",
           timeout: 60000,
         });
-
-        // Small wait to let page settle
         await page.waitForTimeout(5000);
 
-        // 🔍 Maintenance / Down detection
         const content = await page.content();
-
         if (
           content.includes("Maintenance") ||
           content.includes("temporarily unavailable") ||
@@ -98,30 +88,25 @@ async function fetchNationalDashboard(lastCreatedOn = null) {
         break;
       } catch (err) {
         console.log(`⚠️ Attempt ${attempt} failed:`, err.message);
-
         if (attempt === 3) {
           throw new Error("Dashboard failed after 3 attempts: " + err.message);
         }
-
         await page.waitForTimeout(5000);
       }
     }
 
-    if (!loaded) {
-      throw new Error("Dashboard could not be loaded");
-    }
+    if (!loaded) throw new Error("Dashboard could not be loaded");
 
-    // 2️⃣ Switch Graph → Table
+    // 2️⃣ Switch to Table
     const tableBtn = page.locator(
       '.btn-group.btn-toggle-group button:has-text("Table")',
     );
     await tableBtn.waitFor({ state: "visible", timeout: 30000 });
     await tableBtn.click({ force: true });
     await page.waitForTimeout(1500);
-
     console.log("🔄 Switched to Table view");
 
-    // 3️⃣ Set Show = 100
+    // 3️⃣ Set 100 rows
     try {
       const showSelect = page.locator("ng-select.w-100px").first();
       await showSelect.scrollIntoViewIfNeeded();
@@ -141,89 +126,55 @@ async function fetchNationalDashboard(lastCreatedOn = null) {
       console.log("⚠️ Could not set to 100 rows, continuing with 10");
     }
 
-    console.log("🚀 Fast API-based scraping started");
+    // 4️⃣ Fresh DB → pura scrape
+    if (dbCount === 0) {
+      console.log("🚀 Fresh scrape — collecting all records");
+      isSkipping = false; // seedha collect karo
+      await scrapeAllPages(page, ROWS, TOTAL);
+    } else {
+      // 5️⃣ Skip to last pages
+      const skipToPage = Math.floor(dbCount / 100);
+      console.log(`⏩ Skipping to page ${skipToPage}...`);
 
-    // 4️⃣ Fast pagination loop
-    let noNewDataCount = 0;
-    const MAX_NO_DATA = 5;
+      let currentPage = 1;
 
-    while (true) {
-      // Priority check: if we have all data, stop
-      if (TOTAL > 0 && ROWS.size >= TOTAL) {
-        console.log("✅ All data collected");
-        break;
-      }
+      while (currentPage < skipToPage) {
+        const nextBtn = page
+          .locator("td.last-row button", { hasText: "Next" })
+          .first();
 
-       // 🆕 Stop if we hit old records
-      if (shouldStop) {
-        console.log("✅ Reached existing records, stopping early");
-        break;
-      }
+        if ((await nextBtn.count()) === 0) break;
 
+        try {
+          await Promise.all([
+            page.waitForResponse(
+              (res) =>
+                res.url().includes("national_dashboard_application_table") &&
+                res.request().method() === "POST" &&
+                res.status() === 200,
+              { timeout: 12000 },
+            ),
+            nextBtn.click({ force: true }),
+          ]);
 
-      const nextBtn = page
-        .locator("td.last-row button", { hasText: "Next" })
-        .first();
+          currentPage++;
 
-      const btnCount = await nextBtn.count();
-      if (btnCount === 0) {
-        console.log("🛑 Next button not found");
-        break;
-      }
-
-      const sizeBefore = ROWS.size;
-
-      try {
-        await nextBtn.scrollIntoViewIfNeeded();
-
-        await Promise.all([
-          page.waitForResponse(
-            (res) =>
-              res.url().includes("national_dashboard_application_table") &&
-              res.request().method() === "POST" &&
-              res.status() === 200,
-            { timeout: 12000 },
-          ),
-          nextBtn.click({ force: true }),
-        ]);
-
-        // Wait for API listener to process
-        await page.waitForTimeout(500);
-
-        const sizeAfter = ROWS.size;
-
-        // Check if we got new data
-        if (sizeAfter > sizeBefore) {
-          // Success! Reset counter
-          noNewDataCount = 0;
-        } else {
-          // No new data
-          noNewDataCount++;
-          console.log(`⚠️ No new data (${noNewDataCount}/${MAX_NO_DATA})`);
-
-          if (noNewDataCount >= MAX_NO_DATA) {
-            console.log("🛑 No new data after 5 consecutive attempts");
-            break;
+          if (currentPage % 100 === 0) {
+            console.log(`⏩ Skipped ${currentPage}/${skipToPage} pages`);
           }
 
-          // Wait longer before retry
-          await page.waitForTimeout(1500);
-        }
-      } catch (err) {
-        // Click or API failed
-        noNewDataCount++;
-        console.log(
-          `⚠️ Error (${noNewDataCount}/${MAX_NO_DATA}):`,
-          err.message,
-        );
-
-        if (noNewDataCount >= MAX_NO_DATA) {
-          console.log("🛑 Too many consecutive errors");
+          await page.waitForTimeout(150); // fast skip
+        } catch (err) {
+          console.log(`⚠️ Skip error at page ${currentPage}:`, err.message);
           break;
         }
-
-        await page.waitForTimeout(1500);
       }
+
+      // 🆕 Skip complete — ab collect karo
+      isSkipping = false;
+      console.log(`✅ Skip complete at page ${currentPage}, collecting new records now...`);
+
+      await scrapeAllPages(page, ROWS, TOTAL);
     }
 
     console.log("🎉 SCRAPING COMPLETE:", ROWS.size);
@@ -235,7 +186,6 @@ async function fetchNationalDashboard(lastCreatedOn = null) {
     };
   } catch (err) {
     console.error("❌ EPR dashboard fetch error:", err);
-
     return {
       success: false,
       total: ROWS.size,
@@ -244,6 +194,61 @@ async function fetchNationalDashboard(lastCreatedOn = null) {
     };
   } finally {
     await closeBrowser(browser);
+  }
+}
+
+async function scrapeAllPages(page, ROWS, TOTAL) {
+  let noNewDataCount = 0;
+  const MAX_NO_DATA = 5;
+
+  while (true) {
+    if (TOTAL > 0 && ROWS.size >= TOTAL) {
+      console.log("✅ All data collected");
+      break;
+    }
+
+    const nextBtn = page
+      .locator("td.last-row button", { hasText: "Next" })
+      .first();
+
+    if ((await nextBtn.count()) === 0) {
+      console.log("🛑 Last page reached");
+      break;
+    }
+
+    const sizeBefore = ROWS.size;
+
+    try {
+      await nextBtn.scrollIntoViewIfNeeded();
+      await Promise.all([
+        page.waitForResponse(
+          (res) =>
+            res.url().includes("national_dashboard_application_table") &&
+            res.request().method() === "POST" &&
+            res.status() === 200,
+          { timeout: 12000 },
+        ),
+        nextBtn.click({ force: true }),
+      ]);
+
+      await page.waitForTimeout(500);
+
+      if (ROWS.size > sizeBefore) {
+        noNewDataCount = 0;
+      } else {
+        noNewDataCount++;
+        console.log(`⚠️ No new data (${noNewDataCount}/${MAX_NO_DATA})`);
+        if (noNewDataCount >= MAX_NO_DATA) {
+          console.log("🛑 No more new records");
+          break;
+        }
+        await page.waitForTimeout(1500);
+      }
+    } catch (err) {
+      noNewDataCount++;
+      if (noNewDataCount >= MAX_NO_DATA) break;
+      await page.waitForTimeout(1500);
+    }
   }
 }
 
