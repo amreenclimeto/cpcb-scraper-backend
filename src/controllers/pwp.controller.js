@@ -2,6 +2,7 @@ import { scrapeCpcbPwpData } from "../scraper/pwp.scraper.js";
 import { getPwpNewCompaniesService, getPwpStatusChangesService } from "../services/pwp.service.js";
 
 // POST /api/pwp/scrape
+// POST /api/pwp/scrape
 export const scrapePwpController = async (req, res) => {
   try {
     console.log("🚀 PWP scrape triggered via API");
@@ -21,7 +22,6 @@ export const scrapePwpController = async (req, res) => {
         totalScraped: result.totalScraped,
         newCompanies: result.newCompanies,
         statusChanges: result.statusChanges,
-        byStatus: result.byStatus,
       },
     });
 

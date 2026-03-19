@@ -147,60 +147,101 @@ export async function saveScrapedData(rows) {
 //   'Pending'       → sirf pending
 //   koi bhi string  → ILIKE %value% match
 // ─────────────────────────────────────────────────────────
-export async function getNewAfterBaselineService(statusFilter = null) {
+export async function getNewAfterBaselineService({
+  page,
+  limit,
+  statusFilter,
+  search,
+}) {
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
 
-    // Baseline info — YE VALUE KABHI NAHI BADLEGI
+    const offset = (page - 1) * limit;
+
+    // 🔒 Baseline info
     const baselineRes = await client.query(
       `SELECT last_total_count, last_seen_at
        FROM sync_cursors
        WHERE cursor_key = 'epr_national_baseline'`
     );
+
     const baselineCount = baselineRes.rows[0]?.last_total_count ?? 0;
     const baselineSetAt = baselineRes.rows[0]?.last_seen_at ?? null;
 
-    // Current total
+    // 🔹 Current total
     const countRes = await client.query(
-      `SELECT COUNT(*) as total FROM plasticwastemanagement`
+      `SELECT COUNT(*) FROM plasticwastemanagement`
     );
-    const currentTotal = parseInt(countRes.rows[0].total);
+    const currentTotal = Number(countRes.rows[0].count);
 
-    // Dynamic query — status filter optional
-    let queryText = `
+    // 🔥 Base Query
+    let baseQuery = `
+      FROM plasticwastemanagement
+      WHERE is_new_after_baseline = TRUE
+    `;
+
+    const values = [];
+    let index = 1;
+
+    // ✅ Status filter
+    if (statusFilter) {
+      baseQuery += ` AND status ILIKE $${index}`;
+      values.push(`%${statusFilter}%`);
+      index++;
+    }
+
+    // ✅ Search filter
+    if (search) {
+      baseQuery += ` AND (
+        company_legal_name ILIKE $${index}
+        OR company_trade_name ILIKE $${index}
+      )`;
+      values.push(`%${search}%`);
+      index++;
+    }
+
+    // 🔹 Total count (filtered)
+    const countQuery = `SELECT COUNT(*) ${baseQuery}`;
+    const countResult = await client.query(countQuery, values);
+    const total = Number(countResult.rows[0].count);
+
+    // 🔹 Data query (paginated)
+    const dataQuery = `
       SELECT
         reg_id, application_id,
         company_legal_name, company_trade_name,
         applicant_type, status,
         created_on, first_seen_at, synced_at
-      FROM plasticwastemanagement
-      WHERE is_new_after_baseline = TRUE
+      ${baseQuery}
+      ORDER BY first_seen_at DESC
+      LIMIT $${index} OFFSET $${index + 1}
     `;
-    const queryParams = [];
 
-    if (statusFilter) {
-      queryParams.push(`%${statusFilter}%`);
-      queryText += ` AND status ILIKE $1`;
-    }
-
-    queryText += ` ORDER BY first_seen_at DESC`;
-
-    const { rows } = await client.query(queryText, queryParams);
+    const dataResult = await client.query(dataQuery, [
+      ...values,
+      limit,
+      offset,
+    ]);
 
     await client.query("COMMIT");
 
     return {
-      baselineCount,                              // 🔒 pehli scrape ka count — FIXED FOREVER
+      baselineCount,
       baselineSetAt,
       currentTotal,
       addedAfterBaseline: currentTotal - baselineCount,
-      filteredCount: rows.length,
+      filteredCount: total,
       appliedFilter: statusFilter ?? "all",
-      data: rows,
-    };
 
+      // ✅ pagination
+      total,
+      page,
+      limit,
+
+      data: dataResult.rows,
+    };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
@@ -213,19 +254,87 @@ export async function getNewAfterBaselineService(statusFilter = null) {
 // EXISTING SERVICES (unchanged)
 // ─────────────────────────────────────────────────────────
 
-export async function getCurrentDataService() {
-  const { rows } = await pool.query(
-    `SELECT * FROM plasticwastemanagement ORDER BY created_on DESC`
-  );
-  return rows;
+export async function getCurrentDataService({
+  page,
+  limit,
+  entityType,
+  status,
+  search,
+}) {
+  const offset = (page - 1) * limit;
+
+  let query = `SELECT * FROM plasticwastemanagement WHERE 1=1`;
+  let countQuery = `SELECT COUNT(*) FROM plasticwastemanagement WHERE 1=1`;
+
+  const values = [];
+  let index = 1;
+
+  // ✅ Entity Type Filter
+  if (entityType) {
+    query += ` AND applicant_type = $${index}`;
+    countQuery += ` AND applicant_type = $${index}`;
+    values.push(entityType);
+    index++;
+  }
+
+  // ✅ Status Filter
+  if (status) {
+    query += ` AND status = $${index}`;
+    countQuery += ` AND status = $${index}`;
+    values.push(status);
+    index++;
+  }
+
+  // ✅ Search (legal + trade name)
+  if (search) {
+    query += ` AND (
+      company_legal_name ILIKE $${index}
+      OR company_trade_name ILIKE $${index}
+    )`;
+    countQuery += ` AND (
+      company_legal_name ILIKE $${index}
+      OR company_trade_name ILIKE $${index}
+    )`;
+    values.push(`%${search}%`);
+    index++;
+  }
+
+  // ✅ Pagination
+  query += ` ORDER BY created_on DESC LIMIT $${index} OFFSET $${index + 1}`;
+  values.push(limit, offset);
+
+  // 🔥 Execute queries
+  const dataPromise = pool.query(query, values);
+  const countPromise = pool.query(countQuery, values.slice(0, index - 1));
+
+  const [dataResult, countResult] = await Promise.all([
+    dataPromise,
+    countPromise,
+  ]);
+
+  return {
+    total: Number(countResult.rows[0].count),
+    page,
+    limit,
+    data: dataResult.rows,
+  };
 }
 
-export async function getNewCompaniesService() {
+export async function getNewCompaniesService({
+  page,
+  limit,
+  entityType,
+  status,
+  search,
+}) {
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
 
+    const offset = (page - 1) * limit;
+
+    // 🔹 Cursor fetch
     const cursorResult = await client.query(
       `SELECT last_seen_at, last_total_count
        FROM sync_cursors
@@ -235,19 +344,62 @@ export async function getNewCompaniesService() {
     const lastSeenAt = cursorResult.rows[0]?.last_seen_at ?? new Date(0);
     const lastTotalCount = cursorResult.rows[0]?.last_total_count ?? 0;
 
-    const countResult = await client.query(
-      `SELECT COUNT(*) as total FROM plasticwastemanagement`
+    // 🔹 Current total
+    const countAllResult = await client.query(
+      `SELECT COUNT(*) FROM plasticwastemanagement`
     );
-    const currentTotal = parseInt(countResult.rows[0].total);
+    const currentTotal = Number(countAllResult.rows[0].count);
 
-    const { rows } = await client.query(
-      `SELECT * FROM plasticwastemanagement
-       WHERE first_seen_at > $1
-       ORDER BY first_seen_at ASC`,
-      [lastSeenAt]
-    );
+    // 🔥 Dynamic Query
+    let baseQuery = `FROM plasticwastemanagement WHERE first_seen_at > $1`;
+    let values = [lastSeenAt];
+    let index = 2;
 
-    if (rows.length > 0) {
+    // ✅ Entity filter
+    if (entityType) {
+      baseQuery += ` AND applicant_type = $${index}`;
+      values.push(entityType);
+      index++;
+    }
+
+    // ✅ Status filter
+    if (status) {
+      baseQuery += ` AND status = $${index}`;
+      values.push(status);
+      index++;
+    }
+
+    // ✅ Search
+    if (search) {
+      baseQuery += ` AND (
+        company_legal_name ILIKE $${index}
+        OR company_trade_name ILIKE $${index}
+      )`;
+      values.push(`%${search}%`);
+      index++;
+    }
+
+    // 🔹 Count (filtered new companies)
+    const countQuery = `SELECT COUNT(*) ${baseQuery}`;
+    const countResult = await client.query(countQuery, values);
+    const total = Number(countResult.rows[0].count);
+
+    // 🔹 Data query (paginated)
+    const dataQuery = `
+      SELECT *
+      ${baseQuery}
+      ORDER BY first_seen_at ASC
+      LIMIT $${index} OFFSET $${index + 1}
+    `;
+
+    const dataResult = await client.query(dataQuery, [
+      ...values,
+      limit,
+      offset,
+    ]);
+
+    // 🔥 Update cursor only if FIRST PAGE hit (important)
+    if (page === 1 && dataResult.rows.length > 0) {
       await client.query(
         `UPDATE sync_cursors
          SET last_seen_at = NOW(), last_total_count = $1
@@ -258,8 +410,17 @@ export async function getNewCompaniesService() {
 
     await client.query("COMMIT");
 
-    return { previousTotal: lastTotalCount, currentTotal, newCount: rows.length, data: rows };
-
+    return {
+      summary: {
+        previousTotal: lastTotalCount,
+        currentTotal,
+        newCount: total,
+      },
+      total,
+      page,
+      limit,
+      data: dataResult.rows,
+    };
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;

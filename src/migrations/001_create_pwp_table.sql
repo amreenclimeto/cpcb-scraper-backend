@@ -1,30 +1,31 @@
+-- PWP companies table
 CREATE TABLE IF NOT EXISTS pwp_companies (
-  company_id    INTEGER PRIMARY KEY,
-  company       TEXT,
-  state         TEXT,
-  category      TEXT,
-  class         TEXT,
-  address       TEXT,
-  status        VARCHAR(50),
+  id SERIAL PRIMARY KEY,
+  company_id VARCHAR(50) UNIQUE NOT NULL,
+  company TEXT,
+  state TEXT,
+  category TEXT,
+  class TEXT,
+  address TEXT,
+  status VARCHAR(50),
+  is_new BOOLEAN DEFAULT false,
   first_seen_at TIMESTAMPTZ DEFAULT NOW(),
-  last_seen_at  TIMESTAMPTZ DEFAULT NOW(),
-  synced_at     TIMESTAMPTZ DEFAULT NOW()
+  last_seen_at TIMESTAMPTZ DEFAULT NOW(),
+  synced_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- PWP baseline table (entity_type nahi hai kyunki PWP mein ek hi type hai)
+CREATE TABLE IF NOT EXISTS pwp_baseline (
+  id SERIAL PRIMARY KEY,
+  baseline_count INTEGER NOT NULL,
+  set_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- PWP status history
 CREATE TABLE IF NOT EXISTS pwp_status_history (
-  id          SERIAL PRIMARY KEY,
-  company_id  INTEGER NOT NULL,
-  old_status  VARCHAR(50),
-  new_status  VARCHAR(50),
-  changed_at  TIMESTAMPTZ DEFAULT NOW()
+  id SERIAL PRIMARY KEY,
+  company_id VARCHAR(50),
+  old_status VARCHAR(50),
+  new_status VARCHAR(50),
+  changed_at TIMESTAMPTZ DEFAULT NOW()
 );
-
-CREATE INDEX IF NOT EXISTS idx_pwp_first_seen
-ON pwp_companies(first_seen_at);
-
-CREATE INDEX IF NOT EXISTS idx_pwp_status_history_company
-ON pwp_status_history(company_id);
-
-INSERT INTO sync_cursors (cursor_key, last_seen_at, last_total_count)
-VALUES ('pwp_new_companies', NOW(), 0)
-ON CONFLICT (cursor_key) DO NOTHING;

@@ -29,7 +29,7 @@ router.get("/pibo/status-changes", getRecentStatusChangesController);
 router.get("/pibo/status-history/:regId", getStatusHistoryController);
 
 // GET /api/epr-national/new-after-baseline              → saare naye
-// GET /api/epr-national/new-after-baseline?status=Approved  → sirf Approved
+// GET pibo/new-after-baseline?status=Approved  → sirf Approved
 // GET /api/epr-national/new-after-baseline?status=Pending   → sirf Pending
 router.get("/pibo/new-after-baseline", getNewAfterBaselineController);
 // ─── PWP ─────────────────────────────────────────────────

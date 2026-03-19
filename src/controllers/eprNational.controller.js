@@ -112,31 +112,34 @@ export const syncEprNational = async (req, res) => {
 // ─────────────────────────────────────────────────────────
 export const getNewAfterBaselineController = async (req, res) => {
   try {
-    const statusFilter = req.query.status ?? null;
+    const {
+      page = 1,
+      limit = 10,
+      status,
+      search,
+    } = req.query;
 
-    const result = await getNewAfterBaselineService(statusFilter);
+    const result = await getNewAfterBaselineService({
+      page: Number(page),
+      limit: Number(limit),
+      statusFilter: status ?? null,
+      search: search ?? null,
+    });
 
     res.json({
       status: "success",
       meta: {
-        baselineCount: result.baselineCount,           // 🔒 pehli scrape ka count — fixed forever
+        baselineCount: result.baselineCount,
         baselineSetAt: result.baselineSetAt,
         currentTotal: result.currentTotal,
         addedAfterBaseline: result.addedAfterBaseline,
         filteredCount: result.filteredCount,
         appliedFilter: result.appliedFilter,
       },
-      data: result.data.map((row) => ({
-        reg_id: row.reg_id,
-        application_id: row.application_id,
-        company_legal_name: row.company_legal_name,
-        company_trade_name: row.company_trade_name,
-        applicant_type: row.applicant_type,
-        status: row.status,
-        created_on: row.created_on,
-        first_seen_at: row.first_seen_at,
-        synced_at: row.synced_at,
-      })),
+      total: result.total, // ✅ pagination total
+      page: result.page,
+      limit: result.limit,
+      data: result.data,
     });
   } catch (err) {
     res.status(500).json({ status: "error", message: err.message });
@@ -149,18 +152,35 @@ export const getNewAfterBaselineController = async (req, res) => {
 
 export const getNewCompaniesController = async (req, res) => {
   try {
-    const result = await getNewCompaniesService();
+    const {
+      page = 1,
+      limit = 10,
+      entityType,
+      status,
+      search,
+    } = req.query;
+
+    const result = await getNewCompaniesService({
+      page: Number(page),
+      limit: Number(limit),
+      entityType,
+      status,
+      search,
+    });
+
     res.json({
       status: "success",
-      summary: {
-        previousTotal: result.previousTotal,
-        currentTotal: result.currentTotal,
-        newCount: result.newCount,
-      },
+      summary: result.summary,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
       data: result.data,
     });
   } catch (err) {
-    res.status(500).json({ status: "error", message: err.message });
+    res.status(500).json({
+      status: "error",
+      message: err.message,
+    });
   }
 };
 
@@ -188,13 +208,33 @@ export const getRecentStatusChangesController = async (req, res) => {
     res.status(500).json({ status: "error", message: err.message });
   }
 };
-
 export const getCurrentDataController = async (req, res) => {
   try {
-    const data = await getCurrentDataService();
-    res.json({ status: "success", total: data.length, data });
+    const {
+      page = 1,
+      limit = 10,
+      entityType,
+      status,
+      search,
+    } = req.query;
+
+    const result = await getCurrentDataService({
+      page: Number(page),
+      limit: Number(limit),
+      entityType,
+      status,
+      search,
+    });
+
+    res.json({
+      status: "success",
+      ...result,
+    });
   } catch (err) {
-    res.status(500).json({ status: "error", message: err.message });
+    res.status(500).json({
+      status: "error",
+      message: err.message,
+    });
   }
 };
 
