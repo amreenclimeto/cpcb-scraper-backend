@@ -41,7 +41,6 @@ export const scrapeCpcbPiboData = async () => {
         "--disable-dev-shm-usage",
         "--disable-gpu",
         "--no-zygote",
-        "--single-process",
       ],
       ignoreHTTPSErrors: true,
     });
@@ -57,12 +56,29 @@ export const scrapeCpcbPiboData = async () => {
 
       const page = await context.newPage();
 
+      page.on("close", () => {
+        console.log(`❌ [${entityType}] Page closed unexpectedly`);
+      });
+
+      page.on("crash", () => {
+        console.log(`💥 [${entityType}] Page crashed`);
+      });
+
+      page.on("framenavigated", () => {
+        console.log(`🔄 [${entityType}] Page navigated/reloaded`);
+      });
+
       try {
         console.log(`🌐 [${entityType}] Loading dashboard...`);
         await page.goto(DASHBOARD_URL, {
           waitUntil: "networkidle",
           timeout: 60000,
         });
+
+        if (entityType === "Importer") {
+          console.log("⏳ Extra wait for Importer...");
+          await page.waitForTimeout(5000);
+        }
         console.log(`✅ [${entityType}] Dashboard loaded`);
         await page.waitForTimeout(3000);
 
@@ -87,28 +103,72 @@ export const scrapeCpcbPiboData = async () => {
         );
 
         const startTime = Date.now();
-        const result = await page.evaluate(
-          async ({ url, token }) => {
-            try {
-              const res = await fetch(url, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ epr_plastic: token }),
-              });
+        // const result = await page.evaluate(
+        //   async ({ url, token }) => {
+        //     try {
+        //       const res = await fetch(url, {
+        //         method: "POST",
+        //         headers: { "Content-Type": "application/json" },
+        //         body: JSON.stringify({ epr_plastic: token }),
+        //       });
 
-              if (!res.ok) {
-                return { error: `HTTP ${res.status}: ${res.statusText}` };
-              }
+        //       if (!res.ok) {
+        //         return { error: `HTTP ${res.status}: ${res.statusText}` };
+        //       }
 
-              const json = await res.json();
-              return { success: true, json };
-            } catch (e) {
-              return { error: e.message };
+        //       const json = await res.json();
+        //       return { success: true, json };
+        //     } catch (e) {
+        //       return { error: e.message };
+        //     }
+        //   },
+        //   { url: PIBO_API_URL, token },
+        // );
+
+        if (page.isClosed()) {
+          throw new Error(
+            `[${entityType}] Page already closed before evaluate`,
+          );
+        }
+
+        let result;
+        let retries = 2;
+
+        while (retries--) {
+          try {
+            result = await page.evaluate(
+              async ({ url, token }) => {
+                try {
+                  const res = await fetch(url, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ epr_plastic: token }),
+                  });
+
+                  if (!res.ok) {
+                    return { error: `HTTP ${res.status}` };
+                  }
+
+                  const json = await res.json();
+                  return { success: true, json };
+                } catch (e) {
+                  return { error: e.message };
+                }
+              },
+              { url: PIBO_API_URL, token },
+            );
+
+            break; // success
+          } catch (err) {
+            console.log(`⚠️ Retry evaluate (${entityType})...`);
+
+            if (retries === 0) {
+              throw new Error(`Evaluate failed after retry: ${err.message}`);
             }
-          },
-          { url: PIBO_API_URL, token },
-        );
 
+            await page.waitForTimeout(3000);
+          }
+        }
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 
         if (result.error) {
@@ -159,7 +219,10 @@ export const scrapeCpcbPiboData = async () => {
         console.error(`❌ [${entityType}] Error: ${err.message}`);
         stats.byEntity[entityType] = { error: err.message };
       } finally {
-        await page.close().catch(() => {});
+        // await page.close().catch(() => {});
+        if (!page.isClosed()) {
+          await page.close().catch(() => {});
+        }
         console.log(`🔒 [${entityType}] Page closed`);
       }
     }
@@ -265,7 +328,13 @@ async function interceptToken(page, entityType) {
           }
 
           console.log(`🖱️  [${entityType}] Clicking Registered icon...`);
-          await registeredIcon.click();
+          // await registeredIcon.click();
+          await Promise.all([
+            page.waitForResponse((res) =>
+              res.url().includes("fetch_pibo_application_details_by_status"),
+            ),
+            registeredIcon.click(),
+          ]);
           console.log(`✅ [${entityType}] Clicked — waiting for token...`);
           clicked = true;
           break;
@@ -278,122 +347,6 @@ async function interceptToken(page, entityType) {
     })();
   });
 }
-
-// ─── Save with baseline + is_new flag ────────────────────────────────────────
-// async function savePiboData(rows, entityType, status) {
-//   const client = await pool.connect();
-
-//   try {
-//     await client.query("BEGIN");
-
-//     const baselineResult = await client.query(
-//       `SELECT baseline_count FROM pibo_baseline WHERE entity_type = $1`,
-//       [entityType],
-//     );
-//     const isFirstScrape = baselineResult.rows.length === 0;
-//     console.log(`📌 [${entityType}] isFirstScrape: ${isFirstScrape}`);
-
-//     const existing = await client.query(
-//       `SELECT company_id, status FROM pibo_companies WHERE entity_type = $1`,
-//       [entityType],
-//     );
-//     console.log(`🗄️  [${entityType}] Existing in DB: ${existing.rows.length}`);
-
-//     const existingMap = new Map();
-//     existing.rows.forEach((r) =>
-//       existingMap.set(Number(r.company_id), r.status),
-//     );
-
-//     let newCompanies = 0;
-//     let statusChanges = 0;
-//     let batchCount = 0;
-
-//     for (const item of rows) {
-//       const id = Number(item.company_id);
-//       const oldStatus = existingMap.get(id);
-//       const isNew = !existingMap.has(id);
-
-//       if (isNew) {
-//         const flagNew = !isFirstScrape;
-//         if (flagNew) newCompanies++;
-
-//         await client.query(
-//           `INSERT INTO pibo_companies
-//   (company_id, company, address, email, entity_type, status,
-//    is_new, first_seen_at, last_seen_at, synced_at)
-//  VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW(), NOW())
-//  ON CONFLICT (company_id, entity_type) DO NOTHING`,
-//           [
-//             id,
-//             item.company,
-//             item.address,
-//             item.email !== "***" ? item.email : null,
-//             entityType,
-//             status,
-//             flagNew,
-//           ],
-//         );
-
-//         await client.query(
-//           `INSERT INTO pibo_status_history (company_id, entity_type, old_status, new_status)
-//            VALUES ($1, $2, NULL, $3)`,
-//           [id, entityType, status],
-//         );
-//       } else if (oldStatus !== status) {
-//         statusChanges++;
-
-//         await client.query(
-//           `INSERT INTO pibo_status_history (company_id, entity_type, old_status, new_status)
-//            VALUES ($1, $2, $3, $4)`,
-//           [id, entityType, oldStatus, status],
-//         );
-
-//         await client.query(
-//           `UPDATE pibo_companies
-//            SET status = $2, last_seen_at = NOW(), synced_at = NOW()
-//            WHERE company_id = $1 AND entity_type = $3`,
-//           [id, status, entityType],
-//         );
-//       } else {
-//         await client.query(
-//           `UPDATE pibo_companies
-//            SET last_seen_at = NOW(), synced_at = NOW()
-//            WHERE company_id = $1 AND entity_type = $2`,
-//           [id, entityType],
-//         );
-//       }
-
-//       batchCount++;
-//       if (batchCount % 5000 === 0) {
-//         console.log(
-//           `⚡ [${entityType}] DB progress: ${batchCount}/${rows.length} rows`,
-//         );
-//       }
-//     }
-
-//     if (isFirstScrape) {
-//       await client.query(
-//         `INSERT INTO pibo_baseline (entity_type, baseline_count, set_at)
-//          VALUES ($1, $2, NOW())
-//          ON CONFLICT (entity_type)
-//          DO UPDATE SET baseline_count = $2, set_at = NOW()`,
-//         [entityType, rows.length],
-//       );
-//       console.log(`📌 [${entityType}] Baseline saved: ${rows.length}`);
-//     }
-
-//     await client.query("COMMIT");
-//     console.log(`✅ [${entityType}] Transaction committed`);
-
-//     return { total: rows.length, newCompanies, statusChanges, isFirstScrape };
-//   } catch (err) {
-//     await client.query("ROLLBACK");
-//     console.error(`❌ [${entityType}] DB error, rolled back: ${err.message}`);
-//     throw err;
-//   } finally {
-//     client.release();
-//   }
-// }
 
 async function savePiboData(rows, entityType, status) {
   const client = await pool.connect();
