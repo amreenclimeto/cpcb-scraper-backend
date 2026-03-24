@@ -3,7 +3,7 @@ import { chromium } from "playwright";
 export default async function batteryProdMetalWiseDashboardLinks() {
 
   const browser = await chromium.launch({
-    headless: false,
+    headless: true,
     ignoreHTTPSErrors: true
   });
 

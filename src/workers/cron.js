@@ -1,14 +1,14 @@
 import cron from "node-cron";
 import fetchNationalDashboard from "../scraper/eprNational.scraper.js";
-import { saveScrapedData, getLatestCreatedOn } from "../services/eprNational.service.js"; // ✅
+import { saveScrapedData, getLatestCreatedOn } from "../services/eprNational.service.js";
 
-cron.schedule("0 * * * *", async () => {
-  console.log("🕐 Running CPCB national scrape...");
+cron.schedule("0 14 * * *", async () => {
+  console.log("🕑 Running CPCB national scrape at 2 PM...");
 
-  const lastCreatedOn = await getLatestCreatedOn(); // ✅
+  const lastCreatedOn = await getLatestCreatedOn();
   console.log("📅 Scraping after:", lastCreatedOn);
 
-  const result = await fetchNationalDashboard(lastCreatedOn); // ✅
+  const result = await fetchNationalDashboard(lastCreatedOn);
 
   if (!result.success) {
     console.log("❌ Scrape failed:", result.error);
@@ -22,4 +22,7 @@ cron.schedule("0 * * * *", async () => {
 
   const stats = await saveScrapedData(result.rows);
   console.log("✅ Scrape done:", stats);
+
+}, {
+  timezone: "Asia/Kolkata" // ✅ India time fix
 });

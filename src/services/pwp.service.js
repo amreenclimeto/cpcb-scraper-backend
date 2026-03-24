@@ -77,3 +77,86 @@ export async function getPwpStatusChangesService() {
 
   return rows;
 }
+
+export const getPwpRecordsService = async ({
+  page = 1,
+  limit = 10,
+  is_active,
+  is_new,
+  search,
+}) => {
+  const client = await pool.connect();
+
+  try {
+    const offset = (page - 1) * limit;
+
+    let conditions = [];
+    let values = [];
+    let index = 1;
+
+    // ✅ Active filter
+    if (is_active !== undefined) {
+      conditions.push(`is_active = $${index++}`);
+      values.push(is_active === "true");
+    }
+
+    // ✅ New filter
+    if (is_new === "true") {
+      conditions.push(`is_new = true`);
+    }
+
+    // ✅ Search filter
+    if (search) {
+      conditions.push(`
+        (
+          company ILIKE $${index}
+          OR address ILIKE $${index}
+          OR state ILIKE $${index}
+          OR category ILIKE $${index}
+          OR class ILIKE $${index}
+        )
+      `);
+      values.push(`%${search}%`);
+      index++;
+    }
+
+    const whereClause =
+      conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    // ✅ Total count
+    const countQuery = `
+      SELECT COUNT(*) FROM pwp_companies
+      ${whereClause}
+    `;
+
+    const countResult = await client.query(countQuery, values);
+    const total = Number(countResult.rows[0].count);
+
+    // ✅ Data query
+    const dataQuery = `
+      SELECT *
+      FROM pwp_companies
+      ${whereClause}
+      ORDER BY first_seen_at DESC
+      LIMIT $${index++} OFFSET $${index}
+    `;
+
+    const dataResult = await client.query(dataQuery, [
+      ...values,
+      limit,
+      offset,
+    ]);
+
+    return {
+      total,
+      page: Number(page),
+      limit: Number(limit),
+      records: dataResult.rows,
+    };
+
+  } catch (err) {
+    throw err;
+  } finally {
+    client.release();
+  }
+};

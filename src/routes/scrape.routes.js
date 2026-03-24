@@ -10,6 +10,7 @@ import {
 import { scrapeAllMetalsController } from "../controllers/batteryMetalController.js";
 import {
   getPwpNewCompaniesController,
+  getPwpRecords,
   getPwpStatusChangesController,
   scrapePwpController,
 } from "../controllers/pwp.controller.js";
@@ -36,6 +37,9 @@ router.get("/pibo/new-after-baseline", getNewAfterBaselineController);
 router.post("/pwp/scrape", scrapePwpController);
 router.get("/pwp/new-companies", getPwpNewCompaniesController);
 router.get("/pwp/status-changes", getPwpStatusChangesController);
+// /pwp/records?is_new=true&search=oil&page=1&limit=10
+// /pwp/records?is_active=false
+router.get("/pwp/records", getPwpRecords);
 
 //  ─── Manual trigger ─────────────────────────────────────────────────
 router.get("/battery/scrape-all", scrapeAllMetalsController);

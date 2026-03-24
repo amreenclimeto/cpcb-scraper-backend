@@ -84,7 +84,7 @@ export const scrapeCpcbPwpData = async () => {
             return { error: e.message };
           }
         },
-        { url: PWP_API_URL, token }
+        { url: PWP_API_URL, token },
       );
 
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -126,7 +126,6 @@ export const scrapeCpcbPwpData = async () => {
       console.log(`   → New companies:  ${dbResult.newCompanies}`);
       console.log(`   → Status changes: ${dbResult.statusChanges}`);
       console.log(`   → First scrape:   ${dbResult.isFirstScrape}`);
-
     } catch (err) {
       console.error(`❌ Error: ${err.message}`);
       return { success: false, error: err.message };
@@ -143,7 +142,6 @@ export const scrapeCpcbPwpData = async () => {
     console.log(`${"═".repeat(50)}\n`);
 
     return { success: true, ...stats };
-
   } catch (err) {
     console.error("❌ PWP SCRAPER FATAL ERROR:", err.message);
     return { success: false, error: err.message, ...stats };
@@ -186,13 +184,18 @@ async function interceptToken(page) {
         if (
           !url.includes("fetch_pwp_application_details_by_status") ||
           request.method() !== "POST"
-        ) return;
+        )
+          return;
 
         const bodyStr = request.postData();
         if (!bodyStr) return;
 
         let body;
-        try { body = JSON.parse(bodyStr); } catch { return; }
+        try {
+          body = JSON.parse(bodyStr);
+        } catch {
+          return;
+        }
 
         const token = body?.epr_plastic;
         if (!token) return;
@@ -209,12 +212,12 @@ async function interceptToken(page) {
         console.log("🔍 Waiting for PWP registered card...");
         await page.waitForSelector(
           ".card.count-content-pwp.registered .fa.fa-external-link",
-          { timeout: 15000 }
+          { timeout: 15000 },
         );
 
         console.log("🖱️ Clicking PWP Registered icon...");
         await page.click(
-          ".card.count-content-pwp.registered .fa.fa-external-link"
+          ".card.count-content-pwp.registered .fa.fa-external-link",
         );
         console.log("✅ Clicked — waiting for token...");
       } catch (err) {
@@ -233,20 +236,20 @@ async function savePwpData(rows, status) {
 
     // Baseline check
     const baselineResult = await client.query(
-      `SELECT baseline_count FROM pwp_baseline LIMIT 1`
+      `SELECT baseline_count FROM pwp_baseline LIMIT 1`,
     );
     const isFirstScrape = baselineResult.rows.length === 0;
     console.log(`📌 PWP isFirstScrape: ${isFirstScrape}`);
 
     // Existing records
     const existing = await client.query(
-      `SELECT company_id, status FROM pwp_companies`
+      `SELECT company_id, status FROM pwp_companies`,
     );
     console.log(`🗄️ Existing in DB: ${existing.rows.length}`);
 
     const existingMap = new Map();
     existing.rows.forEach((r) =>
-      existingMap.set(String(r.company_id), r.status)
+      existingMap.set(String(r.company_id), r.status),
     );
 
     let newCompanies = 0;
@@ -279,38 +282,36 @@ async function savePwpData(rows, status) {
             item.address,
             status,
             flagNew,
-          ]
+          ],
         );
 
         await client.query(
           `INSERT INTO pwp_status_history (company_id, old_status, new_status)
            VALUES ($1, NULL, $2)`,
-          [item.company_id, status]
+          [item.company_id, status],
         );
-
       } else if (oldStatus !== status) {
         statusChanges++;
 
         await client.query(
           `INSERT INTO pwp_status_history (company_id, old_status, new_status)
            VALUES ($1, $2, $3)`,
-          [item.company_id, oldStatus, status]
+          [item.company_id, oldStatus, status],
         );
 
         await client.query(
           `UPDATE pwp_companies
            SET status=$2, last_seen_at=NOW(), synced_at=NOW()
            WHERE company_id=$1`,
-          [item.company_id, status]
+          [item.company_id, status],
         );
-
       } else {
         // Existing record — sirf timestamps update karo
         await client.query(
           `UPDATE pwp_companies
-           SET last_seen_at=NOW(), synced_at=NOW()
+           SET last_seen_at=NOW(), synced_at=NOW(), is_active = true
            WHERE company_id=$1`,
-          [item.company_id]
+          [item.company_id],
         );
       }
 
@@ -325,16 +326,40 @@ async function savePwpData(rows, status) {
       await client.query(
         `INSERT INTO pwp_baseline (baseline_count, set_at)
          VALUES ($1, NOW())`,
-        [rows.length]
+        [rows.length],
       );
       console.log(`📌 PWP Baseline saved: ${rows.length}`);
     }
+    // ─── REMOVED DATA HANDLE ─────────────────────
 
+    // API IDs
+    const apiIds = rows.map((r) => String(r.company_id));
+    const apiIdSet = new Set(apiIds);
+
+    // DB IDs
+    const dbIdsResult = await client.query(
+      `SELECT company_id FROM pwp_companies`,
+    );
+
+    const dbIds = dbIdsResult.rows.map((r) => String(r.company_id));
+
+    // missing (removed from portal)
+    const missingIds = dbIds.filter((id) => !apiIdSet.has(id));
+
+    console.log(`🚨 Removed companies: ${missingIds.length}`);
+
+    if (missingIds.length > 0) {
+      await client.query(
+        `UPDATE pwp_companies
+     SET is_active = false
+     WHERE company_id = ANY($1)`,
+        [missingIds],
+      );
+    }
     await client.query("COMMIT");
     console.log("✅ PWP Transaction committed");
 
     return { total: rows.length, newCompanies, statusChanges, isFirstScrape };
-
   } catch (err) {
     await client.query("ROLLBACK");
     console.error(`❌ PWP DB error, rolled back: ${err.message}`);
