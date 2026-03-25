@@ -4,6 +4,7 @@ import {
   getStats,
   getRecords,
   markAsSeen,
+  exportPiboRecordsController,
 } from "../controllers/pibo.controller.js";
 
 const router = express.Router();
@@ -26,5 +27,7 @@ router.get("/records", getRecords);
 // PATCH /api/pibo/mark-seen
 // Body: { entity_type: "Brand Owner" } OR { company_ids: [1,2,3] } OR {}
 router.patch("/mark-seen", markAsSeen);
+
+router.get("/export", exportPiboRecordsController);
 
 export default router;

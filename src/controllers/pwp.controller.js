@@ -1,5 +1,5 @@
 import { scrapeCpcbPwpData } from "../scraper/pwp.scraper.js";
-import { getPwpNewCompaniesService, getPwpRecordsService, getPwpStatusChangesService } from "../services/pwp.service.js";
+import { exportPwpRecordsService, getPwpNewCompaniesService, getPwpRecordsService, getPwpStatusChangesService } from "../services/pwp.service.js";
 
 // POST /api/pwp/scrape
 // POST /api/pwp/scrape
@@ -70,11 +70,27 @@ export const getPwpStatusChangesController = async (req, res) => {
 export const getPwpRecords = async (req, res) => {
   try {
     const result = await getPwpRecordsService(req.query);
-
     res.json({
       status: "success",
       data: result,
     });
+  } catch (err) {
+    res.status(500).json({
+      status: "error",
+      message: err.message,
+    });
+  }
+};
+
+export const exportPwpRecords = async (req, res) => {
+  try {
+    const data = await exportPwpRecordsService(req.query);
+
+    res.json({
+      status: "success",
+      data,
+    });
+
   } catch (err) {
     res.status(500).json({
       status: "error",

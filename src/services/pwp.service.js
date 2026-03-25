@@ -84,6 +84,9 @@ export const getPwpRecordsService = async ({
   is_active,
   is_new,
   search,
+  date,        // 🔥 single date
+  from_date,   // 🔥 range start
+  to_date,     // 🔥 range end
 }) => {
   const client = await pool.connect();
 
@@ -105,34 +108,49 @@ export const getPwpRecordsService = async ({
       conditions.push(`is_new = true`);
     }
 
-    // ✅ Search filter
+    // ✅ Search
     if (search) {
-      conditions.push(`
-        (
-          company ILIKE $${index}
-          OR address ILIKE $${index}
-          OR state ILIKE $${index}
-          OR category ILIKE $${index}
-          OR class ILIKE $${index}
-        )
-      `);
+      conditions.push(`(
+        company ILIKE $${index}
+        OR address ILIKE $${index}
+        OR state ILIKE $${index}
+        OR category ILIKE $${index}
+        OR class ILIKE $${index}
+      )`);
       values.push(`%${search}%`);
       index++;
     }
 
+    // =========================
+    // 🔥 DATE FILTER LOGIC
+    // =========================
+
+    // ✅ Single date (priority)
+    if (date) {
+      conditions.push(`DATE(first_seen_at) = $${index++}`);
+      values.push(date); // "2026-03-25"
+    }
+
+    // ✅ Range filter
+    else if (from_date && to_date) {
+      conditions.push(`DATE(first_seen_at) BETWEEN $${index++} AND $${index++}`);
+      values.push(from_date, to_date);
+    }
+
+    // =========================
+
     const whereClause =
       conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    // ✅ Total count
+    // ✅ Count
     const countQuery = `
       SELECT COUNT(*) FROM pwp_companies
       ${whereClause}
     `;
-
     const countResult = await client.query(countQuery, values);
     const total = Number(countResult.rows[0].count);
 
-    // ✅ Data query
+    // ✅ Data
     const dataQuery = `
       SELECT *
       FROM pwp_companies
@@ -153,6 +171,67 @@ export const getPwpRecordsService = async ({
       limit: Number(limit),
       records: dataResult.rows,
     };
+
+  } catch (err) {
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+export const exportPwpRecordsService = async ({
+  is_active,
+  is_new,
+  search,
+  from_date,
+  to_date,
+}) => {
+  const client = await pool.connect();
+
+  try {
+    let conditions = [];
+    let values = [];
+    let index = 1;
+
+    if (is_active !== undefined) {
+      conditions.push(`is_active = $${index++}`);
+      values.push(is_active === "true");
+    }
+
+    if (is_new === "true") {
+      conditions.push(`is_new = true`);
+    }
+
+    if (search) {
+      conditions.push(`(
+        company ILIKE $${index}
+        OR address ILIKE $${index}
+        OR state ILIKE $${index}
+        OR category ILIKE $${index}
+        OR class ILIKE $${index}
+      )`);
+      values.push(`%${search}%`);
+      index++;
+    }
+
+    if (from_date && to_date) {
+      conditions.push(`DATE(first_seen_at) BETWEEN $${index++} AND $${index++}`);
+      values.push(from_date, to_date);
+    }
+
+    const whereClause =
+      conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    const query = `
+      SELECT *
+      FROM pwp_companies
+      ${whereClause}
+      ORDER BY first_seen_at DESC
+    `;
+
+    const result = await client.query(query, values);
+
+    return result.rows;
 
   } catch (err) {
     throw err;

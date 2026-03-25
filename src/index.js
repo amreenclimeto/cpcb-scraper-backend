@@ -7,6 +7,8 @@ import scrapePiboRoutes from "./routes/pibo.routes.js";
 import { startBatteryScrapeJob } from "./workers/Batteryscrape.job.js";
 import "./workers/cron.js";
 import { startNationalWorker } from "./queue/national.worker.js"; // ✅ queue.js → worker.js
+import { startPiboCron } from "./workers/pibo.cron.js";
+import { startPwpCron } from "./workers/pwp.cron.js";
 
 dotenv.config();
 
@@ -22,6 +24,9 @@ app.use("/api/pibo", scrapePiboRoutes);
 
 startNationalWorker();
 startBatteryScrapeJob();
+// server start ke baad
+startPiboCron();
+startPwpCron();
 
 app.get("/", async (req, res) => {
   try {

@@ -3,6 +3,7 @@ import {
   getPiboStats,
   getPiboRecords,
   markPiboAsSeen,
+  exportPiboRecords,
 } from "../services/pibo.service.js";
 
 // ─── POST /api/pibo/scrape ────────────────────────────────────────────────────
@@ -56,9 +57,18 @@ export const getStats = async (req, res) => {
 //   limit       = 50
 export const getRecords = async (req, res) => {
   try {
-    const { entity_type, is_new, page, limit } = req.query;
+const { entity_type, is_new, page, limit, date, from_date, to_date, search } = req.query;
 
-    const data = await getPiboRecords({ entity_type, is_new, page, limit });
+const data = await getPiboRecords({
+  entity_type,
+  is_new,
+  page,
+  limit,
+  date,
+  from_date,
+  to_date,
+  search, // ✅ add this
+});
 
     res.json({ status: "success", data });
   } catch (err) {
@@ -86,5 +96,22 @@ export const markAsSeen = async (req, res) => {
   } catch (err) {
     console.error("❌ markAsSeen error:", err.message);
     res.status(500).json({ status: "error", message: err.message });
+  }
+};
+
+export const exportPiboRecordsController = async (req, res) => {
+  try {
+    const data = await exportPiboRecords(req.query);
+    res.json({
+      status: "success",
+      data,
+    });
+
+  } catch (err) {
+    console.error("❌ export error:", err.message);
+    res.status(500).json({
+      status: "error",
+      message: err.message,
+    });
   }
 };

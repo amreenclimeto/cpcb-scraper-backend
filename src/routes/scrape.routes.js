@@ -9,6 +9,7 @@ import {
 } from "../controllers/eprNational.controller.js";
 import { scrapeAllMetalsController } from "../controllers/batteryMetalController.js";
 import {
+  exportPwpRecords,
   getPwpNewCompaniesController,
   getPwpRecords,
   getPwpStatusChangesController,
@@ -40,6 +41,7 @@ router.get("/pwp/status-changes", getPwpStatusChangesController);
 // /pwp/records?is_new=true&search=oil&page=1&limit=10
 // /pwp/records?is_active=false
 router.get("/pwp/records", getPwpRecords);
+router.get("/pwp/export", exportPwpRecords);
 
 //  ─── Manual trigger ─────────────────────────────────────────────────
 router.get("/battery/scrape-all", scrapeAllMetalsController);
