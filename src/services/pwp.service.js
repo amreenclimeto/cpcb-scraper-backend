@@ -1,0 +1,241 @@
+import pool from "../config/db.config.js";
+
+
+// GET new companies — cursor based
+export async function getPwpNewCompaniesService() {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const cursorResult = await client.query(
+      `SELECT last_seen_at, last_total_count
+       FROM sync_cursors
+       WHERE cursor_key = 'pwp_new_companies'`
+    );
+
+    const lastSeenAt = cursorResult.rows[0]?.last_seen_at ?? new Date(0);
+    const lastTotalCount = cursorResult.rows[0]?.last_total_count ?? 0;
+
+    const countResult = await client.query(
+      `SELECT COUNT(*) as total FROM pwp_companies`
+    );
+    const currentTotal = parseInt(countResult.rows[0].total);
+
+    const { rows } = await client.query(
+      `SELECT * FROM pwp_companies
+       WHERE first_seen_at > $1
+       ORDER BY first_seen_at ASC`,
+      [lastSeenAt]
+    );
+
+    if (rows.length > 0) {
+      await client.query(
+        `UPDATE sync_cursors
+         SET last_seen_at = NOW(), last_total_count = $1
+         WHERE cursor_key = 'pwp_new_companies'`,
+        [currentTotal]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    return {
+      previousTotal: lastTotalCount,
+      currentTotal,
+      newCount: rows.length,
+      data: rows,
+    };
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// GET status changes — aaj ke
+export async function getPwpStatusChangesService() {
+  const { rows } = await pool.query(
+    `SELECT
+      h.company_id,
+      p.company,
+      p.state,
+      p.category,
+      p.class,
+      p.address,
+      h.old_status,
+      h.new_status,
+      h.changed_at
+     FROM pwp_status_history h
+     JOIN pwp_companies p ON p.company_id = h.company_id
+     WHERE DATE(h.changed_at) = CURRENT_DATE
+     AND h.old_status IS NOT NULL
+     ORDER BY h.changed_at DESC`
+  );
+
+  return rows;
+}
+
+export const getPwpRecordsService = async ({
+  page = 1,
+  limit = 10,
+  is_active,
+  is_new,
+  search,
+  date,        // 🔥 single date
+  from_date,   // 🔥 range start
+  to_date,     // 🔥 range end
+}) => {
+  const client = await pool.connect();
+
+  try {
+    const offset = (page - 1) * limit;
+
+    let conditions = [];
+    let values = [];
+    let index = 1;
+
+    // ✅ Active filter
+    if (is_active !== undefined) {
+      conditions.push(`is_active = $${index++}`);
+      values.push(is_active === "true");
+    }
+
+    // ✅ New filter
+    if (is_new === "true") {
+      conditions.push(`is_new = true`);
+    }
+
+    // ✅ Search
+    if (search) {
+      conditions.push(`(
+        company ILIKE $${index}
+        OR address ILIKE $${index}
+        OR state ILIKE $${index}
+        OR category ILIKE $${index}
+        OR class ILIKE $${index}
+      )`);
+      values.push(`%${search}%`);
+      index++;
+    }
+
+    // =========================
+    // 🔥 DATE FILTER LOGIC
+    // =========================
+
+    // ✅ Single date (priority)
+    if (date) {
+      conditions.push(`DATE(first_seen_at) = $${index++}`);
+      values.push(date); // "2026-03-25"
+    }
+
+    // ✅ Range filter
+    else if (from_date && to_date) {
+      conditions.push(`DATE(first_seen_at) BETWEEN $${index++} AND $${index++}`);
+      values.push(from_date, to_date);
+    }
+
+    // =========================
+
+    const whereClause =
+      conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    // ✅ Count
+    const countQuery = `
+      SELECT COUNT(*) FROM pwp_companies
+      ${whereClause}
+    `;
+    const countResult = await client.query(countQuery, values);
+    const total = Number(countResult.rows[0].count);
+
+    // ✅ Data
+    const dataQuery = `
+      SELECT *
+      FROM pwp_companies
+      ${whereClause}
+      ORDER BY first_seen_at DESC
+      LIMIT $${index++} OFFSET $${index}
+    `;
+
+    const dataResult = await client.query(dataQuery, [
+      ...values,
+      limit,
+      offset,
+    ]);
+
+    return {
+      total,
+      page: Number(page),
+      limit: Number(limit),
+      records: dataResult.rows,
+    };
+
+  } catch (err) {
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+export const exportPwpRecordsService = async ({
+  is_active,
+  is_new,
+  search,
+  from_date,
+  to_date,
+}) => {
+  const client = await pool.connect();
+
+  try {
+    let conditions = [];
+    let values = [];
+    let index = 1;
+
+    if (is_active !== undefined) {
+      conditions.push(`is_active = $${index++}`);
+      values.push(is_active === "true");
+    }
+
+    if (is_new === "true") {
+      conditions.push(`is_new = true`);
+    }
+
+    if (search) {
+      conditions.push(`(
+        company ILIKE $${index}
+        OR address ILIKE $${index}
+        OR state ILIKE $${index}
+        OR category ILIKE $${index}
+        OR class ILIKE $${index}
+      )`);
+      values.push(`%${search}%`);
+      index++;
+    }
+
+    if (from_date && to_date) {
+      conditions.push(`DATE(first_seen_at) BETWEEN $${index++} AND $${index++}`);
+      values.push(from_date, to_date);
+    }
+
+    const whereClause =
+      conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    const query = `
+      SELECT *
+      FROM pwp_companies
+      ${whereClause}
+      ORDER BY first_seen_at DESC
+    `;
+
+    const result = await client.query(query, values);
+
+    return result.rows;
+
+  } catch (err) {
+    throw err;
+  } finally {
+    client.release();
+  }
+};
