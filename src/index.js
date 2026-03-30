@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import pool from "./config/db.config.js";
 import scrapeRoutes from "./routes/scrape.routes.js";
 import scrapePiboRoutes from "./routes/pibo.routes.js";
+import scrapeEprCerRoutes from "./routes/eprCertificate.routes.js";
 import { startBatteryScrapeJob } from "./workers/Batteryscrape.job.js";
 import "./workers/cron.js";
 import { startNationalWorker } from "./queue/national.worker.js"; // ✅ queue.js → worker.js
@@ -21,6 +22,7 @@ const PORT = process.env.PORT || 5000;
 
 app.use("/api", scrapeRoutes);
 app.use("/api/pibo", scrapePiboRoutes);
+app.use("/api/epr-cer", scrapeEprCerRoutes);
 
 startNationalWorker();
 startBatteryScrapeJob();
