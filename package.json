@@ -6,7 +6,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon src/index.js",
-    "start": "nodemon src/index.js",
+    "start": "node src/index.js",
     "migrate": "node src/database/runMigrations.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
