@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS pwp_companies (
   first_seen_at TIMESTAMPTZ DEFAULT NOW(),
   last_seen_at TIMESTAMPTZ DEFAULT NOW(),
   synced_at TIMESTAMPTZ DEFAULT NOW(),
-   is_active BOOLEAN DEFAULT true, 
+  is_active BOOLEAN DEFAULT true 
 );
 
 -- PWP baseline table (entity_type nahi hai kyunki PWP mein ek hi type hai)

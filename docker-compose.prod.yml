@@ -7,6 +7,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env.production
+    ports:
+      - "5054:5054"
     depends_on:
       postgres:
         condition: service_healthy
@@ -20,6 +22,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env.production
+    ports:
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -32,6 +36,8 @@ services:
     image: redis:7-alpine
     container_name: cpcb-scraper-redis
     restart: unless-stopped
+    ports:
+      - "6380:6379"
     volumes:
       - redis_data:/data
 
@@ -40,7 +46,7 @@ services:
     container_name: cpcb-scraper-nginx
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "5001:80"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
