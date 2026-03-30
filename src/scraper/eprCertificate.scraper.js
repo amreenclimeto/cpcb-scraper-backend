@@ -8,16 +8,19 @@ const httpsAgent = new https.Agent({
 
 export const fetchEprCertificates = async () => {
   let browser;
+  const startTime = Date.now();
 
   try {
-    console.log("🚀 Starting EPR scraper...");
+    console.log("🚀 [SCRAPER START] EPR Certificate Scraper");
 
     const { browser: br, page } = await getPage();
     browser = br;
 
+    console.log("🌐 Browser launched");
+
     let payload = null;
 
-    console.log("🌐 Opening CPCB page...");
+    console.log("🌍 Opening CPCB certificates page...");
 
     // 🔥 Capture API request payload
     page.on("request", (request) => {
@@ -25,53 +28,63 @@ export const fetchEprCertificates = async () => {
         request.url().includes("list_certificates") &&
         request.method() === "POST"
       ) {
-        console.log("📡 API Request intercepted:", request.url());
+        console.log("📡 [INTERCEPT] API Request:", request.url());
 
         try {
           const postData = request.postData();
+
           if (postData) {
             payload = JSON.parse(postData);
-            console.log("✅ Payload captured:", payload);
+            console.log("✅ [PAYLOAD CAPTURED]", {
+              keys: Object.keys(payload),
+              sample: payload,
+            });
           }
         } catch (err) {
-          console.log("❌ Payload parse error:", err.message);
+          console.log("❌ [PAYLOAD PARSE ERROR]:", err.message);
         }
       }
     });
 
     await page.goto(
       "https://eprplastic.cpcb.gov.in/#/plastic/home/viewCertificates",
-      { waitUntil: "networkidle" },
+      { waitUntil: "networkidle" }
     );
 
-    console.log("⏳ Waiting for API trigger...");
+    console.log("⏳ Waiting for network/API trigger (7s)...");
     await page.waitForTimeout(7000);
 
     if (!payload) {
-      console.log("❌ Payload not found after page load");
+      console.log("❌ [ERROR] Payload not captured");
       throw new Error("Payload not captured from network");
     }
 
-    console.log("📤 Calling API with payload...");
+    console.log("📤 Calling CPCB API with captured payload...");
+
+    const apiStart = Date.now();
 
     const response = await axios.post(
       "https://eprplastic.cpcb.gov.in/epr/m3/api/v1.0/pibo/list_certificates",
       payload,
       {
         httpsAgent,
-        timeout: 60000, // ⏱️ increased timeout
-      },
+        timeout: 60000,
+      }
     );
 
-    console.log("✅ API Response received");
+    console.log(
+      `✅ [API SUCCESS] Status: ${response.status} | Time: ${
+        Date.now() - apiStart
+      }ms`
+    );
 
     const data = response.data?.tableData?.bodyContent || [];
 
-    console.log("📊 Records fetched:", data.length);
+    console.log(`📊 Total Records Fetched: ${data.length}`);
 
     const formatted = [];
 
-    for (const item of data) {
+    for (const [index, item] of data.entries()) {
       const obj = {
         category: item.processing_type?.trim(),
         generated: Number(item["col-3"]) || 0,
@@ -79,16 +92,27 @@ export const fetchEprCertificates = async () => {
         available: Number(item["col-1"]) || 0,
       };
 
-      console.log("🧾 Row:", obj);
+      console.log(
+        `🧾 [ROW ${index + 1}]`,
+        `Category: ${obj.category} | Gen: ${obj.generated} | Trans: ${obj.transferred} | Avail: ${obj.available}`
+      );
 
       formatted.push(obj);
     }
 
+    console.log(
+      `🎯 [SCRAPER SUCCESS] Processed ${formatted.length} records in ${
+        Date.now() - startTime
+      }ms`
+    );
+
     return formatted;
   } catch (error) {
-    console.error("❌ EPR Scraper Error FULL:", {
+    console.error("❌ [SCRAPER ERROR]", {
       message: error.message,
       code: error.code,
+      status: error?.response?.status,
+      data: error?.response?.data,
       stack: error.stack,
     });
 
@@ -96,5 +120,9 @@ export const fetchEprCertificates = async () => {
   } finally {
     console.log("🧹 Closing browser...");
     await closeBrowser(browser);
+
+    console.log(
+      `🔚 [SCRAPER END] Total Time: ${Date.now() - startTime}ms`
+    );
   }
 };

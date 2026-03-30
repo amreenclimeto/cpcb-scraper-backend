@@ -70,6 +70,32 @@ export const getAuditHistoryController = async (req, res) => {
   }
 };
  
+// ══ Controller ════════════════════════════════════════════════════════════════
+// export const getAuditHistoryController = async (req, res) => {
+//   try {
+//     const limit    = Math.min(parseInt(req.query.limit) || 10, 100); // hard cap 100
+//     const page     = Math.max(parseInt(req.query.page)  || 1,  1);
+//     const category = req.query.category?.trim() || null;
+//     const from     = req.query.from?.trim()     || null; // "YYYY-MM-DD"
+//     const to       = req.query.to?.trim()       || null; // "YYYY-MM-DD"
+ 
+//     const result = await getAuditHistoryService({ limit, page, category, from, to });
+ 
+//     res.json({
+//       success:          true,
+//       total_snapshots:  result.total,
+//       total_pages:      result.totalPages,
+//       current_page:     result.currentPage,
+//       limit:            result.limit,
+//       data:             result.data,
+//     });
+//   } catch (error) {
+//     console.error("❌ getAuditHistoryController:", error);
+//     res.status(500).json({ success: false, message: error.message });
+//   }
+// };
+ 
+
 // ─────────────────────────────────────────────
 // GET /api/epr/category/:category
 // Single category across all snapshots
