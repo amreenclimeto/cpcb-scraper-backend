@@ -10,6 +10,7 @@ import "./workers/cron.js";
 import { startNationalWorker } from "./queue/national.worker.js"; // ✅ queue.js → worker.js
 import { startPiboCron } from "./workers/pibo.cron.js";
 import { startPwpCron } from "./workers/pwp.cron.js";
+import { startPwpCertificate } from "./workers/eprCertificate.cron.js";
 
 dotenv.config();
 
@@ -29,12 +30,13 @@ startBatteryScrapeJob();
 // server start ke baad
 startPiboCron();
 startPwpCron();
+startPwpCertificate();
 
 app.get("/", async (req, res) => {
   try {
     const result = await pool.query("SELECT NOW()");
     res.json({
-      message: "Server running successfully",
+      message: "🌍 CLIMETO CPCB Scraper backend APIs is running...",
       time: result.rows[0].now,
     });
   } catch (error) {
