@@ -28,8 +28,19 @@ if (process.env.FRONTEND_URL) {
 app.use(
   cors({
     origin(origin, callback) {
+      const normalizedOrigin = origin?.replace(/\/$/, "");
+      const isVercelFrontend =
+        !!normalizedOrigin &&
+        /^https:\/\/cpcb-scraper-frontend(-[a-z0-9-]+)?\.vercel\.app$/i.test(
+          normalizedOrigin
+        );
+
       // Allow non-browser clients (curl, server-to-server) and whitelisted origins
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (
+        !origin ||
+        allowedOrigins.includes(normalizedOrigin) ||
+        isVercelFrontend
+      ) {
         return callback(null, true);
       }
       return callback(new Error("Not allowed by CORS"));
