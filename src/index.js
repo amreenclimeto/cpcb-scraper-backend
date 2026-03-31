@@ -38,13 +38,25 @@ app.use(
         );
 
       // Allow non-browser clients (curl, server-to-server) and whitelisted origins
-      if (
-        !origin ||
-        allowedOrigins.includes(normalizedOrigin) ||
-        isVercelFrontend
-      ) {
+      if (!origin || allowedOrigins.includes(normalizedOrigin) || isVercelFrontend) {
         return callback(null, true);
       }
+
+      // Accept the literal "null" origin (file:// or some webviews)
+      if (origin === "null") {
+        return callback(null, true);
+      }
+
+      // Accept common native app/webview schemes and file URLs
+      if (typeof origin === "string" && /^(file:|app:|capacitor:|ionic:|electron:)/i.test(origin)) {
+        return callback(null, true);
+      }
+
+      // Accept localhost development origins
+      if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(origin)) {
+        return callback(null, true);
+      }
+
       return callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
