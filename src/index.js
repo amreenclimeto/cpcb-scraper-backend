@@ -76,7 +76,7 @@ app.get("/", async (req, res) => {
   try {
     const result = await pool.query("SELECT NOW()");
     res.json({
-      message: "Server running successfully",
+      message: "🌍 CLIMETO CPCB Scraper backend APIs is running...",
       time: result.rows[0].now,
     });
   } catch (error) {

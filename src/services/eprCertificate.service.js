@@ -157,6 +157,126 @@ export const getAuditHistoryService = async ({ limit = 10, category = null }) =>
     (a, b) => new Date(a.time) - new Date(b.time)
   );
 };
+
+// ══ Service ═══════════════════════════════════════════════════════════════════
+// export const getAuditHistoryService = async ({
+//   limit    = 10,
+//   page     = 1,
+//   category = null,
+//   from     = null,   // "YYYY-MM-DD"
+//   to       = null,   // "YYYY-MM-DD"
+// }) => {
+//   const offset = (page - 1) * limit;
+ 
+//   // ── Build WHERE clause for snapshot date range ──────────────────────────────
+//   const snapWhere  = [];
+//   const snapParams = [];
+ 
+//   if (from) {
+//     snapParams.push(from);
+//     snapWhere.push(`created_at >= $${snapParams.length}::date`);
+//   }
+//   if (to) {
+//     snapParams.push(to);
+//     // include the full "to" day by shifting to next day midnight
+//     snapWhere.push(`created_at < ($${snapParams.length}::date + INTERVAL '1 day')`);
+//   }
+ 
+//   const snapWhereSQL = snapWhere.length ? `WHERE ${snapWhere.join(" AND ")}` : "";
+ 
+//   // ── 1. Count total snapshots matching the date filter ───────────────────────
+//   const countResult = await db.query(
+//     `SELECT COUNT(*) AS total
+//      FROM epr_pwp_cer_snapshots
+//      ${snapWhereSQL}`,
+//     snapParams
+//   );
+ 
+//   const total      = parseInt(countResult.rows[0].total);
+//   const totalPages = Math.ceil(total / limit);
+ 
+//   if (total === 0) {
+//     return { total: 0, totalPages: 0, currentPage: page, limit, data: [] };
+//   }
+ 
+//   // ── 2. Fetch paginated snapshot IDs ─────────────────────────────────────────
+//   const paginatedParams = [...snapParams, limit, offset];
+//   const snapshots = await db.query(
+//     `SELECT id, created_at
+//      FROM epr_pwp_cer_snapshots
+//      ${snapWhereSQL}
+//      ORDER BY created_at DESC
+//      LIMIT  $${paginatedParams.length - 1}
+//      OFFSET $${paginatedParams.length}`,
+//     paginatedParams
+//   );
+ 
+//   if (!snapshots.rows.length) {
+//     return { total, totalPages, currentPage: page, limit, data: [] };
+//   }
+ 
+//   const snapshotIds = snapshots.rows.map((s) => s.id);
+ 
+//   // ── 3. Fetch detail rows — optional category filter ──────────────────────────
+//   const detailParams = [snapshotIds];
+//   const catSQL = category
+//     ? (() => {
+//         detailParams.push(category);
+//         return `AND s.category = $${detailParams.length}`;
+//       })()
+//     : "";
+ 
+//   const rows = await db.query(
+//     `SELECT
+//        s.snapshot_id,
+//        s.category,
+//        s.generated,
+//        s.transferred,
+//        s.available,
+//        COALESCE(d.generated_diff,   0) AS generated_diff,
+//        COALESCE(d.transferred_diff, 0) AS transferred_diff,
+//        COALESCE(d.available_diff,   0) AS available_diff,
+//        snap.created_at                 AS snapshot_time
+//      FROM epr_pwp_cer_snapshot_details s
+//      LEFT JOIN epr_pwp_cer_deltas d
+//        ON  s.snapshot_id = d.snapshot_id
+//        AND s.category    = d.category
+//      JOIN epr_pwp_cer_snapshots snap
+//        ON  s.snapshot_id = snap.id
+//      WHERE s.snapshot_id = ANY($1)
+//      ${catSQL}
+//      ORDER BY snap.created_at ASC, s.category`,
+//     detailParams
+//   );
+ 
+//   // ── 4. Group by snapshot ─────────────────────────────────────────────────────
+//   const snapshotMap = {};
+//   for (const row of rows.rows) {
+//     const key = row.snapshot_id;
+//     if (!snapshotMap[key]) {
+//       snapshotMap[key] = {
+//         snapshot_id: key,
+//         time:        row.snapshot_time,
+//         data:        [],
+//       };
+//     }
+//     snapshotMap[key].data.push({
+//       category:         row.category,
+//       generated:        Number(row.generated),
+//       transferred:      Number(row.transferred),
+//       available:        Number(row.available),
+//       generated_diff:   Number(row.generated_diff),
+//       transferred_diff: Number(row.transferred_diff),
+//       available_diff:   Number(row.available_diff),
+//     });
+//   }
+ 
+//   const data = Object.values(snapshotMap).sort(
+//     (a, b) => new Date(a.time) - new Date(b.time)
+//   );
+ 
+//   return { total, totalPages, currentPage: page, limit, data };
+// };
  
 // ─────────────────────────────────────────────
 // Get single category history across all snapshots
