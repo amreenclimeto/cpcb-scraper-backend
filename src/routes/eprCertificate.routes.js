@@ -42,8 +42,22 @@ router.get("/latest", getLatestAudit);
 // GET   http://localhost:3000/api/epr-cer/history?limit=10&category=Cat I(Recycling)
 // Use permissive route-level CORS for this endpoint (reflect origin, allow credentials)
 const permissiveCors = cors({ origin: true, credentials: true, methods: ["GET", "OPTIONS"] });
-router.options("/history", permissiveCors);
-router.get("/history", permissiveCors, getAuditHistoryController);
+
+// Normalize some non-standard origins (e.g. apps/webviews that send "0")
+function normalizeOrigin(req, res, next) {
+  try {
+    const origin = req.headers.origin;
+    if (origin === "0" || origin === 0) {
+      req.headers.origin = process.env.FRONTEND_URL || "https://cpcb-scraper-frontend.vercel.app";
+    }
+  } catch (e) {
+    // ignore
+  }
+  next();
+}
+
+router.options("/history", normalizeOrigin, permissiveCors);
+router.get("/history", normalizeOrigin, permissiveCors, getAuditHistoryController);
  
 // GET   /api/epr/category/Cat%20II(EOL)
 router.get("/category/:category", getCategoryHistoryController);
