@@ -92,7 +92,7 @@ export const runEprScraper = async () => {
 // Get all snapshots grouped — for time-series chart
 // params: { limit, category }
 // ─────────────────────────────────────────────
-export const getAuditHistoryService = async ({ limit = 10, category = null }) => {
+export const getAuditHistoryService = async ({ limit = 10, category = null, prevIntervalHours = 0 }) => {
   const snapshots = await db.query(
     `SELECT id, created_at
      FROM epr_pwp_cer_snapshots
@@ -154,9 +154,81 @@ export const getAuditHistoryService = async ({ limit = 10, category = null }) =>
   }
  
   // Return newest snapshots first (descending by time)
-  return Object.values(snapshotMap).sort(
+  const snapshotsArr = Object.values(snapshotMap).sort(
     (a, b) => new Date(b.time) - new Date(a.time)
   );
+
+  // If prevIntervalHours requested, find snapshot at or before (time - interval) and compute interval diffs
+  if (prevIntervalHours && Number(prevIntervalHours) > 0) {
+    const intervalMs = Number(prevIntervalHours) * 60 * 60 * 1000;
+
+    for (const snap of snapshotsArr) {
+      const targetTimeIso = new Date(new Date(snap.time).getTime() - intervalMs).toISOString();
+
+      const prevRes = await db.query(
+        `SELECT id, created_at FROM epr_pwp_cer_snapshots
+         WHERE created_at <= $1::timestamptz
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [targetTimeIso]
+      );
+
+      if (!prevRes.rows.length) {
+        snap.prev_snapshot_id = null;
+        snap.prev_time = null;
+        snap.data = snap.data.map((c) => ({
+          ...c,
+          prev_generated_interval: null,
+          prev_transferred_interval: null,
+          prev_available_interval: null,
+          generated_diff_interval: null,
+          transferred_diff_interval: null,
+          available_diff_interval: null,
+        }));
+        continue;
+      }
+
+      const prevId = prevRes.rows[0].id;
+      const prevTime = prevRes.rows[0].created_at;
+
+      const prevDetails = await db.query(
+        `SELECT category, generated, transferred, available
+         FROM epr_pwp_cer_snapshot_details
+         WHERE snapshot_id = $1`,
+        [prevId]
+      );
+
+      const prevMap = {};
+      prevDetails.rows.forEach((r) => {
+        prevMap[r.category] = {
+          generated: Number(r.generated),
+          transferred: Number(r.transferred),
+          available: Number(r.available),
+        };
+      });
+
+      snap.prev_snapshot_id = prevId;
+      snap.prev_time = prevTime;
+
+      snap.data = snap.data.map((c) => {
+        const prev = prevMap[c.category] || { generated: 0, transferred: 0, available: 0 };
+        const prevGen = prev.generated;
+        const prevTrans = prev.transferred;
+        const prevAvail = prev.available;
+        return {
+          ...c,
+          prev_generated_interval: prevGen,
+          prev_transferred_interval: prevTrans,
+          prev_available_interval: prevAvail,
+          generated_diff_interval: Number(c.generated) - prevGen,
+          transferred_diff_interval: Number(c.transferred) - prevTrans,
+          available_diff_interval: Number(c.available) - prevAvail,
+        };
+      });
+    }
+  }
+
+  return snapshotsArr;
 };
 
 // ══ Service ═══════════════════════════════════════════════════════════════════

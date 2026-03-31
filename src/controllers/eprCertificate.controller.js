@@ -67,8 +67,9 @@ export const getAuditHistoryController = async (req, res) => {
   try {
     const limit    = parseInt(req.query.limit) || 10;
     const category = req.query.category || null;
- 
-    const result = await getAuditHistoryService({ limit, category });
+    const prevHours = req.query.prev_hours ? Number(req.query.prev_hours) : 0;
+
+    const result = await getAuditHistoryService({ limit, category, prevIntervalHours: prevHours });
  
     res.json({
       success:          true,
