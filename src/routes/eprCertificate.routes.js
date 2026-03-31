@@ -40,8 +40,10 @@ router.post("/run", runScraperController);
 router.get("/latest", getLatestAudit);
 
 // GET   http://localhost:3000/api/epr-cer/history?limit=10&category=Cat I(Recycling)
-router.options("/history", cors(corsOptions));
-router.get("/history", cors(corsOptions), getAuditHistoryController);
+// Use permissive route-level CORS for this endpoint (reflect origin, allow credentials)
+const permissiveCors = cors({ origin: true, credentials: true, methods: ["GET", "OPTIONS"] });
+router.options("/history", permissiveCors);
+router.get("/history", permissiveCors, getAuditHistoryController);
  
 // GET   /api/epr/category/Cat%20II(EOL)
 router.get("/category/:category", getCategoryHistoryController);
