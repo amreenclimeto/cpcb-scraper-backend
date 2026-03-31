@@ -29,16 +29,33 @@ export async function registerRecurringScrapeJobs() {
   if (!queue) return;
 
   const pattern = process.env.SCRAPE_INTERVAL_CRON || "0 */2 * * *";
+  const tz = process.env.SCRAPE_TIMEZONE || "Asia/Kolkata";
   const jobs = ["national", "pibo", "pwp", "battery", "epr-certificate"];
 
+  // Ensure a QueueScheduler exists to properly handle repeatable jobs
+  const { QueueScheduler } = await import("bullmq");
+  // eslint-disable-next-line no-new
+  new QueueScheduler("cpcb-scrape-jobs", { connection: await getRedisConnection() });
+
   for (const name of jobs) {
-    await queue.add(name, { source: "scheduler" }, {
-      jobId: `repeat-${name}`,
-      repeat: { pattern },
-      removeOnComplete: 10,
-      removeOnFail: 20,
-    });
+    // Remove any existing repeatable with same jobId to avoid duplicates
+    const jobId = `repeat-${name}`;
+    await queue.removeRepeatableByKey(`cpcb-scrape-jobs:${jobId}:${pattern}`);
+
+    await queue.add(
+      name,
+      { source: "scheduler" },
+      {
+        jobId,
+        repeat: {
+          cron: pattern,
+          tz,
+        },
+        removeOnComplete: 10,
+        removeOnFail: 20,
+      }
+    );
   }
 
-  console.log(`⏰ Registered recurring scrape jobs with cron: ${pattern}`);
+  console.log(`⏰ Registered recurring scrape jobs with cron: ${pattern} (${tz})`);
 }

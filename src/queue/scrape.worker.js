@@ -34,7 +34,7 @@ export async function startScrapeWorker() {
     },
     {
       connection,
-      concurrency: 1,
+      concurrency: Number(process.env.SCRAPE_WORKER_CONCURRENCY) || 2,
     }
   );
 
