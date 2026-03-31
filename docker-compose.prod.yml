@@ -8,29 +8,11 @@ services:
     env_file:
       - .env.production
     ports:
-      - "5054:5054"
+      - "5054:5001"
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_started
     command: sh -c "npm run migrate && npm run start"
-
-  postgres:
-    image: postgres:16-alpine
-    container_name: cpcb-scraper-postgres
-    restart: unless-stopped
-    env_file:
-      - .env.production
-    ports:
-      - "5433:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d cpcb_scraper"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
 
   redis:
     image: redis:7-alpine
@@ -53,5 +35,4 @@ services:
       - api
 
 volumes:
-  postgres_data:
   redis_data:

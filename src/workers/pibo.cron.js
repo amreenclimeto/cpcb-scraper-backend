@@ -1,13 +1,12 @@
 import cron from "node-cron";
 import { scrapeCpcbPiboData } from "../scraper/Pibo.scraper.js";
 
-// 🕔 Daily 5 PM (IST)
 export const startPiboCron = () => {
   cron.schedule(
-    "0 17 * * *", // 5:00 PM
+    "0 */2 * * *",
     async () => {
       try {
-        console.log("⏰ Running PIBO scraper (cron 5 PM)");
+        console.log("⏰ Running PIBO scraper (every 2 hours)");
 
         const result = await scrapeCpcbPiboData();
 
@@ -21,7 +20,7 @@ export const startPiboCron = () => {
       }
     },
     {
-      timezone: "Asia/Kolkata", // 🔥 important
+      timezone: "Asia/Kolkata",
     }
   );
 };

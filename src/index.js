@@ -6,10 +6,12 @@ import scrapeRoutes from "./routes/scrape.routes.js";
 import scrapePiboRoutes from "./routes/pibo.routes.js";
 import scrapeEprCerRoutes from "./routes/eprCertificate.routes.js";
 import { startBatteryScrapeJob } from "./workers/Batteryscrape.job.js";
-import "./workers/cron.js";
+import { startNationalCron } from "./workers/cron.js";
 import { startNationalWorker } from "./queue/national.worker.js"; // ✅ queue.js → worker.js
 import { startPiboCron } from "./workers/pibo.cron.js";
 import { startPwpCron } from "./workers/pwp.cron.js";
+import { registerRecurringScrapeJobs } from "./queue/scrape.queue.js";
+import { startScrapeWorker } from "./queue/scrape.worker.js";
 
 dotenv.config();
 
@@ -59,10 +61,16 @@ app.use("/api/pibo", scrapePiboRoutes);
 app.use("/api/epr-cer", scrapeEprCerRoutes);
 
 startNationalWorker();
-startBatteryScrapeJob();
-// server start ke baad
-startPiboCron();
-startPwpCron();
+if (process.env.USE_REDIS === "true") {
+  startScrapeWorker();
+  registerRecurringScrapeJobs();
+} else {
+  // Fallback for environments where Redis queue is disabled
+  startNationalCron();
+  startBatteryScrapeJob();
+  startPiboCron();
+  startPwpCron();
+}
 
 app.get("/", async (req, res) => {
   try {

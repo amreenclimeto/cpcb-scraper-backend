@@ -3,10 +3,10 @@ import { scrapeCpcbPwpData } from "../scraper/pwp.scraper.js";
 
 export const startPwpCron = () => {
   cron.schedule(
-    "0 17 * * *", // 🕔 5 PM daily
+    "0 */2 * * *",
     async () => {
       try {
-        console.log("⏰ Running PWP scraper (5 PM)");
+        console.log("⏰ Running PWP scraper (every 2 hours)");
 
         const result = await scrapeCpcbPwpData();
 
@@ -26,7 +26,7 @@ export const startPwpCron = () => {
       }
     },
     {
-      timezone: "Asia/Kolkata", // 🔥 must
+      timezone: "Asia/Kolkata",
     }
   );
 };

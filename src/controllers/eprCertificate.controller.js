@@ -1,9 +1,20 @@
 import { getAuditHistoryService, getCategoryHistoryService, runEprScraper } from "../services/eprCertificate.service.js";
 import db from "../config/db.config.js";
+import { enqueueScrapeJob } from "../queue/scrape.queue.js";
 
 // 🔹 Run scraper manually
 export const runScraperController = async (req, res) => {
   try {
+    if (process.env.USE_REDIS === "true") {
+      const job = await enqueueScrapeJob("epr-certificate", { source: "api" });
+      return res.status(202).json({
+        success: true,
+        status: "queued",
+        message: "EPR certificate scrape queued",
+        jobId: job?.id,
+      });
+    }
+
     const result = await runEprScraper();
     res.json({ success: true, data: result });
   } catch (error) {

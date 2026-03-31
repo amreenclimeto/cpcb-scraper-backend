@@ -5,12 +5,23 @@ import {
   markPiboAsSeen,
   exportPiboRecords,
 } from "../services/pibo.service.js";
+import { enqueueScrapeJob } from "../queue/scrape.queue.js";
 
 // ─── POST /api/pibo/scrape ────────────────────────────────────────────────────
 // Manually scraper trigger karo
 export const triggerScrape = async (req, res) => {
   try {
     console.log("🚀 Manual PIBO scrape triggered");
+
+    if (process.env.USE_REDIS === "true") {
+      const job = await enqueueScrapeJob("pibo", { source: "api" });
+      return res.status(202).json({
+        status: "queued",
+        message: "PIBO scrape queued",
+        jobId: job?.id,
+      });
+    }
+
     const result = await scrapeCpcbPiboData();
 
     if (!result.success) {

@@ -5,6 +5,7 @@ import scrapeMetalData, {
 } from "../scraper/metalData.scraper.js";
 import { upsertBatteryProducer } from "../services/Batteryproducer.service.js";
 import { processBatteryMetalTarget } from "../services/Batterymetaltarget.service.js";
+import { enqueueScrapeJob } from "../queue/scrape.queue.js";
 
 export async function runFullScrape() {
   const results = {};
@@ -43,6 +44,15 @@ export async function runFullScrape() {
 
 export async function scrapeAllMetalsController(req, res) {
   try {
+    if (process.env.USE_REDIS === "true") {
+      const job = await enqueueScrapeJob("battery", { source: "api" });
+      return res.status(202).json({
+        status: "queued",
+        message: "Battery scrape queued",
+        jobId: job?.id,
+      });
+    }
+
     const results = await runFullScrape();
     res.json({ status: "success", results });
   } catch (err) {

@@ -8,6 +8,7 @@ import {
   saveScrapedData,
 } from "../services/eprNational.service.js";
 import { getNationalQueue } from "../queue/national.queue.js";
+import { enqueueScrapeJob } from "../queue/scrape.queue.js";
 import fetchNationalDashboard from "../scraper/eprNational.scraper.js";
 
 // ─────────────────────────────────────────────────────────
@@ -59,6 +60,15 @@ import fetchNationalDashboard from "../scraper/eprNational.scraper.js";
 // };
 export const syncEprNational = async (req, res) => {
   try {
+    if (process.env.USE_REDIS === "true") {
+      const job = await enqueueScrapeJob("national", { source: "api" });
+      return res.status(202).json({
+        status: "queued",
+        mode: "queue",
+        jobId: job?.id,
+      });
+    }
+
     const lastCreatedOn = await getLatestCreatedOn();
     console.log("📅 Scraping after:", lastCreatedOn);
 

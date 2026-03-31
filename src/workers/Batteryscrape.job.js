@@ -3,10 +3,9 @@ import { runFullScrape } from "../controllers/batteryMetalController.js";
 
 export function startBatteryScrapeJob() {
 
-  console.log("⏰ Battery scrape cron registered — runs daily at 2 PM");
+  console.log("⏰ Battery scrape cron registered — runs every 2 hours");
 
-  // ✅ Runs daily at 2:00 PM
-  cron.schedule("0 14 * * *", async () => {
+  cron.schedule("0 */2 * * *", async () => {
 
     const startTime = new Date();
     console.log(`\n🔄 [CRON] Battery scrape started at ${startTime.toISOString()}`);
@@ -28,7 +27,7 @@ export function startBatteryScrapeJob() {
     }
 
   }, {
-    timezone: "Asia/Kolkata" // ✅ important
+    timezone: "Asia/Kolkata"
   });
 
 }
