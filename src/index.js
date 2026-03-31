@@ -54,7 +54,7 @@ app.use(
 );
 app.use(express.json());
 
-const PORT = process.env.PORT || 5000;
+const PORT = Number(process.env.PORT) || 5000;
 
 app.use("/api", scrapeRoutes);
 app.use("/api/pibo", scrapePiboRoutes);
@@ -86,6 +86,6 @@ app.get("/", async (req, res) => {
   }
 });
 
-app.listen(process.env.PORT || 5054, '0.0.0.0', () => {
-  console.log(`🚀 Server running on port ${process.env.PORT || 5054}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
