@@ -28,9 +28,11 @@ export async function registerRecurringScrapeJobs() {
   const queue = await getScrapeQueue();
   if (!queue) return;
 
-  const pattern = process.env.SCRAPE_INTERVAL_CRON || "0 */2 * * *";
   const tz = process.env.SCRAPE_TIMEZONE || "Asia/Kolkata";
-  const jobs = ["national", "pibo", "pwp", "battery", "epr-certificate"];
+  const lightPattern = process.env.SCRAPE_LIGHT_CRON || "30 */2 * * *"; // light jobs every 2 hours at :30
+  const heavyPattern = process.env.SCRAPE_HEAVY_CRON || "30 */6 * * *"; // heavy jobs every 6 hours at :30
+  const lightJobs = ["epr-certificate", "pwp"];
+  const heavyJobs = ["national", "pibo", "battery"];
 
   // Ensure a QueueScheduler exists to properly handle repeatable jobs
   const bullmq = await import("bullmq");
@@ -48,10 +50,20 @@ export async function registerRecurringScrapeJobs() {
     );
   }
 
-  for (const name of jobs) {
-    // Remove any existing repeatable with same jobId to avoid duplicates
+  // helper to add repeatable safely
+  const addRepeatable = async (name, cronPattern) => {
     const jobId = `repeat-${name}`;
-    await queue.removeRepeatableByKey(`cpcb-scrape-jobs:${jobId}:${pattern}`);
+    // remove existing repeatables with same jobId (best-effort)
+    try {
+      const keys = await queue.getRepeatableJobs();
+      for (const k of keys) {
+        if (k.id === jobId) {
+          await queue.removeRepeatableByKey(k.key);
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
 
     await queue.add(
       name,
@@ -59,14 +71,23 @@ export async function registerRecurringScrapeJobs() {
       {
         jobId,
         repeat: {
-          cron: pattern,
+          cron: cronPattern,
           tz,
         },
         removeOnComplete: 10,
         removeOnFail: 20,
       }
     );
+  };
+
+  // register light jobs
+  for (const name of lightJobs) {
+    await addRepeatable(name, lightPattern);
+  }
+  // register heavy jobs
+  for (const name of heavyJobs) {
+    await addRepeatable(name, heavyPattern);
   }
 
-  console.log(`⏰ Registered recurring scrape jobs with cron: ${pattern} (${tz})`);
+  console.log(`⏰ Registered recurring scrape jobs (light:${lightPattern}, heavy:${heavyPattern}) (${tz})`);
 }
