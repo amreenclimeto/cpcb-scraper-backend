@@ -33,9 +33,20 @@ export async function registerRecurringScrapeJobs() {
   const jobs = ["national", "pibo", "pwp", "battery", "epr-certificate"];
 
   // Ensure a QueueScheduler exists to properly handle repeatable jobs
-  const { QueueScheduler } = await import("bullmq");
-  // eslint-disable-next-line no-new
-  new QueueScheduler("cpcb-scrape-jobs", { connection: await getRedisConnection() });
+  const bullmq = await import("bullmq");
+  const QueueSchedulerClass =
+    bullmq.QueueScheduler || bullmq.default?.QueueScheduler || bullmq.default;
+
+  const connection = await getRedisConnection();
+  if (typeof QueueSchedulerClass === "function") {
+    // eslint-disable-next-line no-new
+    new QueueSchedulerClass("cpcb-scrape-jobs", { connection });
+  } else {
+    console.warn(
+      "⚠️ QueueScheduler not available from bullmq import; repeatable jobs might not be managed automatically.",
+      Object.keys(bullmq)
+    );
+  }
 
   for (const name of jobs) {
     // Remove any existing repeatable with same jobId to avoid duplicates
