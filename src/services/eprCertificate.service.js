@@ -153,8 +153,9 @@ export const getAuditHistoryService = async ({ limit = 10, category = null }) =>
     });
   }
  
+  // Return newest snapshots first (descending by time)
   return Object.values(snapshotMap).sort(
-    (a, b) => new Date(a.time) - new Date(b.time)
+    (a, b) => new Date(b.time) - new Date(a.time)
   );
 };
 
