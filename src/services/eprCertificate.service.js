@@ -92,46 +92,66 @@ export const runEprScraper = async () => {
 // Get all snapshots grouped — for time-series chart
 // params: { limit, category }
 // ─────────────────────────────────────────────
-export const getAuditHistoryService = async ({ limit = 10, category = null, prevIntervalHours = 0 }) => {
+export const getAuditHistoryService = async ({ limit = 10, page = 1, category = null, from = null, to = null, prevIntervalHours = 0 }) => {
+  const offset = (page - 1) * limit;
+
+  // Build snapshot WHERE
+  const snapWhere = [];
+  const snapParams = [];
+  if (from) {
+    snapParams.push(from);
+    snapWhere.push(`created_at >= $${snapParams.length}::date`);
+  }
+  if (to) {
+    snapParams.push(to);
+    snapWhere.push(`created_at < ($${snapParams.length}::date + INTERVAL '1 day')`);
+  }
+  const snapWhereSQL = snapWhere.length ? `WHERE ${snapWhere.join(" AND ")}` : "";
+
+  // Count total
+  const countResult = await db.query(
+    `SELECT COUNT(*) AS total FROM epr_pwp_cer_snapshots ${snapWhereSQL}`,
+    snapParams
+  );
+  const total = parseInt(countResult.rows[0].total);
+  const totalPages = Math.ceil(total / limit);
+  if (total === 0) {
+    return { total: 0, totalPages: 0, currentPage: page, limit, data: [] };
+  }
+
+  // Fetch paginated snapshot IDs
+  const paginatedParams = [...snapParams, limit, offset];
   const snapshots = await db.query(
-    `SELECT id, created_at
-     FROM epr_pwp_cer_snapshots
-     ORDER BY created_at DESC
-     LIMIT $1`,
-    [limit]
+    `SELECT id, created_at FROM epr_pwp_cer_snapshots ${snapWhereSQL} ORDER BY created_at DESC LIMIT $${paginatedParams.length - 1} OFFSET $${paginatedParams.length}`,
+    paginatedParams
   );
- 
-  if (!snapshots.rows.length) return [];
- 
+
+  if (!snapshots.rows.length) {
+    return { total, totalPages, currentPage: page, limit, data: [] };
+  }
+
   const snapshotIds = snapshots.rows.map((s) => s.id);
- 
-  const categoryFilter = category ? `AND s.category = $2` : "";
-  const queryParams    = category ? [snapshotIds, category] : [snapshotIds];
- 
+
+  // Build detail query
+  const detailParams = [snapshotIds];
+  const catSQL = category ? (() => { detailParams.push(category); return `AND s.category = $${detailParams.length}`; })() : "";
+
   const rows = await db.query(
-    `SELECT
-       s.snapshot_id,
-       s.category,
-       s.generated,
-       s.transferred,
-       s.available,
-       COALESCE(d.generated_diff, 0)   AS generated_diff,
-       COALESCE(d.transferred_diff, 0) AS transferred_diff,
-       COALESCE(d.available_diff, 0)   AS available_diff,
-       snap.created_at                 AS snapshot_time
+    `SELECT s.snapshot_id, s.category, s.generated, s.transferred, s.available,
+            COALESCE(d.generated_diff, 0) AS generated_diff,
+            COALESCE(d.transferred_diff, 0) AS transferred_diff,
+            COALESCE(d.available_diff, 0) AS available_diff,
+            snap.created_at AS snapshot_time
      FROM epr_pwp_cer_snapshot_details s
-     LEFT JOIN epr_pwp_cer_deltas d
-       ON s.snapshot_id = d.snapshot_id
-       AND s.category   = d.category
-     JOIN epr_pwp_cer_snapshots snap
-       ON s.snapshot_id = snap.id
+     LEFT JOIN epr_pwp_cer_deltas d ON s.snapshot_id = d.snapshot_id AND s.category = d.category
+     JOIN epr_pwp_cer_snapshots snap ON s.snapshot_id = snap.id
      WHERE s.snapshot_id = ANY($1)
-     ${categoryFilter}
+     ${catSQL}
      ORDER BY snap.created_at ASC, s.category`,
-    queryParams
+    detailParams
   );
- 
-  // Group rows by snapshot
+
+  // Group by snapshot
   const snapshotMap = {};
   for (const row of rows.rows) {
     const key = row.snapshot_id;
@@ -143,36 +163,28 @@ export const getAuditHistoryService = async ({ limit = 10, category = null, prev
       };
     }
     snapshotMap[key].data.push({
-      category:         row.category,
-      generated:        Number(row.generated),
-      transferred:      Number(row.transferred),
-      available:        Number(row.available),
-      generated_diff:   Number(row.generated_diff),
+      category: row.category,
+      generated: Number(row.generated),
+      transferred: Number(row.transferred),
+      available: Number(row.available),
+      generated_diff: Number(row.generated_diff),
       transferred_diff: Number(row.transferred_diff),
-      available_diff:   Number(row.available_diff),
+      available_diff: Number(row.available_diff),
     });
   }
- 
-  // Return newest snapshots first (descending by time)
-  const snapshotsArr = Object.values(snapshotMap).sort(
-    (a, b) => new Date(b.time) - new Date(a.time)
-  );
 
-  // If prevIntervalHours requested, find snapshot at or before (time - interval) and compute interval diffs
+  // Sort newest-first
+  let data = Object.values(snapshotMap).sort((a, b) => new Date(b.time) - new Date(a.time));
+
+  // If prevIntervalHours requested, compute interval diffs (uses per-snapshot DB lookup)
   if (prevIntervalHours && Number(prevIntervalHours) > 0) {
     const intervalMs = Number(prevIntervalHours) * 60 * 60 * 1000;
-
-    for (const snap of snapshotsArr) {
+    for (const snap of data) {
       const targetTimeIso = new Date(new Date(snap.time).getTime() - intervalMs).toISOString();
-
       const prevRes = await db.query(
-        `SELECT id, created_at FROM epr_pwp_cer_snapshots
-         WHERE created_at <= $1::timestamptz
-         ORDER BY created_at DESC
-         LIMIT 1`,
+        `SELECT id, created_at FROM epr_pwp_cer_snapshots WHERE created_at <= $1::timestamptz ORDER BY created_at DESC LIMIT 1`,
         [targetTimeIso]
       );
-
       if (!prevRes.rows.length) {
         snap.prev_snapshot_id = null;
         snap.prev_time = null;
@@ -187,17 +199,12 @@ export const getAuditHistoryService = async ({ limit = 10, category = null, prev
         }));
         continue;
       }
-
       const prevId = prevRes.rows[0].id;
       const prevTime = prevRes.rows[0].created_at;
-
       const prevDetails = await db.query(
-        `SELECT category, generated, transferred, available
-         FROM epr_pwp_cer_snapshot_details
-         WHERE snapshot_id = $1`,
+        `SELECT category, generated, transferred, available FROM epr_pwp_cer_snapshot_details WHERE snapshot_id = $1`,
         [prevId]
       );
-
       const prevMap = {};
       prevDetails.rows.forEach((r) => {
         prevMap[r.category] = {
@@ -206,10 +213,8 @@ export const getAuditHistoryService = async ({ limit = 10, category = null, prev
           available: Number(r.available),
         };
       });
-
       snap.prev_snapshot_id = prevId;
       snap.prev_time = prevTime;
-
       snap.data = snap.data.map((c) => {
         const prev = prevMap[c.category] || { generated: 0, transferred: 0, available: 0 };
         const prevGen = prev.generated;
@@ -228,7 +233,7 @@ export const getAuditHistoryService = async ({ limit = 10, category = null, prev
     }
   }
 
-  return snapshotsArr;
+  return { total, totalPages, currentPage: page, limit, data };
 };
 
 // ══ Service ═══════════════════════════════════════════════════════════════════
