@@ -35,6 +35,8 @@ export async function startScrapeWorker() {
     {
       connection,
       concurrency: Number(process.env.SCRAPE_WORKER_CONCURRENCY) || 2,
+      // lock duration longer than typical job runtime to avoid premature stall detection
+      lockDuration: Number(process.env.SCRAPE_JOB_LOCK_MS) || 1000 * 60 * 60 * 2, // 2 hours
     }
   );
 

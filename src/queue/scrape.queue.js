@@ -1,4 +1,5 @@
 import { getRedisConnection } from "./queueFactory.js";
+import { Queue, QueueScheduler } from "bullmq";
 
 let scrapeQueue = null;
 
@@ -6,9 +7,20 @@ export async function getScrapeQueue() {
   if (process.env.USE_REDIS !== "true") return null;
   if (scrapeQueue) return scrapeQueue;
 
-  const { Queue } = await import("bullmq");
   const connection = await getRedisConnection();
   scrapeQueue = new Queue("cpcb-scrape-jobs", { connection });
+
+  // Ensure a QueueScheduler is running for this queue (handles stalled jobs/repeatables)
+  try {
+    // eslint-disable-next-line no-new
+    new QueueScheduler("cpcb-scrape-jobs", {
+      connection,
+      stalledInterval: Number(process.env.BULLMQ_STALLED_INTERVAL_MS) || 30000,
+    });
+  } catch (e) {
+    console.warn("⚠️ Failed to create QueueScheduler:", e.message);
+  }
+
   return scrapeQueue;
 }
 
