@@ -1,5 +1,4 @@
 import { getRedisConnection } from "./queueFactory.js";
-import { Queue, QueueScheduler } from "bullmq";
 
 let scrapeQueue = null;
 
@@ -8,15 +7,25 @@ export async function getScrapeQueue() {
   if (scrapeQueue) return scrapeQueue;
 
   const connection = await getRedisConnection();
-  scrapeQueue = new Queue("cpcb-scrape-jobs", { connection });
+
+  // dynamic import to support CommonJS/ESM shapes of bullmq
+  const bullmq = await import("bullmq");
+  const QueueClass = bullmq.Queue || bullmq.default?.Queue || bullmq.default;
+  const QueueSchedulerClass = bullmq.QueueScheduler || bullmq.default?.QueueScheduler || bullmq.default;
+
+  scrapeQueue = new QueueClass("cpcb-scrape-jobs", { connection });
 
   // Ensure a QueueScheduler is running for this queue (handles stalled jobs/repeatables)
   try {
-    // eslint-disable-next-line no-new
-    new QueueScheduler("cpcb-scrape-jobs", {
-      connection,
-      stalledInterval: Number(process.env.BULLMQ_STALLED_INTERVAL_MS) || 30000,
-    });
+    if (typeof QueueSchedulerClass === "function") {
+      // eslint-disable-next-line no-new
+      new QueueSchedulerClass("cpcb-scrape-jobs", {
+        connection,
+        stalledInterval: Number(process.env.BULLMQ_STALLED_INTERVAL_MS) || 30000,
+      });
+    } else {
+      console.warn("⚠️ QueueScheduler not available via bullmq import");
+    }
   } catch (e) {
     console.warn("⚠️ Failed to create QueueScheduler:", e.message);
   }
