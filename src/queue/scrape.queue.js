@@ -1,25 +1,23 @@
 import { getRedisConnection } from "./queueFactory.js";
 
-let scrapeQueue = null;
+const queues = {}; // cache created queues by name
 
-export async function getScrapeQueue() {
+export async function getQueue(queueName = "cpcb-scrape-jobs-light") {
   if (process.env.USE_REDIS !== "true") return null;
-  if (scrapeQueue) return scrapeQueue;
+  if (queues[queueName]) return queues[queueName];
 
   const connection = await getRedisConnection();
-
-  // dynamic import to support CommonJS/ESM shapes of bullmq
   const bullmq = await import("bullmq");
   const QueueClass = bullmq.Queue || bullmq.default?.Queue || bullmq.default;
   const QueueSchedulerClass = bullmq.QueueScheduler || bullmq.default?.QueueScheduler || bullmq.default;
 
-  scrapeQueue = new QueueClass("cpcb-scrape-jobs", { connection });
+  const queue = new QueueClass(queueName, { connection });
+  queues[queueName] = queue;
 
-  // Ensure a QueueScheduler is running for this queue (handles stalled jobs/repeatables)
   try {
     if (typeof QueueSchedulerClass === "function") {
       // eslint-disable-next-line no-new
-      new QueueSchedulerClass("cpcb-scrape-jobs", {
+      new QueueSchedulerClass(queueName, {
         connection,
         stalledInterval: Number(process.env.BULLMQ_STALLED_INTERVAL_MS) || 30000,
       });
@@ -27,14 +25,14 @@ export async function getScrapeQueue() {
       console.warn("⚠️ QueueScheduler not available via bullmq import");
     }
   } catch (e) {
-    console.warn("⚠️ Failed to create QueueScheduler:", e.message);
+    console.warn("⚠️ Failed to create QueueScheduler for", queueName, e.message);
   }
 
-  return scrapeQueue;
+  return queue;
 }
 
-export async function enqueueScrapeJob(jobType, payload = {}) {
-  const queue = await getScrapeQueue();
+export async function enqueueScrapeJob(jobType, payload = {}, queueName = "cpcb-scrape-jobs-light") {
+  const queue = await getQueue(queueName);
   if (!queue) return null;
 
   return queue.add(jobType, payload, {
@@ -46,8 +44,10 @@ export async function enqueueScrapeJob(jobType, payload = {}) {
 }
 
 export async function registerRecurringScrapeJobs() {
-  const queue = await getScrapeQueue();
-  if (!queue) return;
+  // create both queues
+  const lightQueue = await getQueue("cpcb-scrape-jobs-light");
+  const heavyQueue = await getQueue("cpcb-scrape-jobs-heavy");
+  if (!lightQueue || !heavyQueue) return;
 
   const tz = process.env.SCRAPE_TIMEZONE || "Asia/Kolkata";
   const lightPattern = process.env.SCRAPE_LIGHT_CRON || "30 */2 * * *"; // light jobs every 2 hours at :30
@@ -56,58 +56,35 @@ export async function registerRecurringScrapeJobs() {
   const heavyJobs = ["national", "pibo", "battery"];
 
   // Ensure a QueueScheduler exists to properly handle repeatable jobs
-  const bullmq = await import("bullmq");
-  const QueueSchedulerClass =
-    bullmq.QueueScheduler || bullmq.default?.QueueScheduler || bullmq.default;
-
+  // QueueSchedulers already created in getQueue
   const connection = await getRedisConnection();
-  if (typeof QueueSchedulerClass === "function") {
-    // eslint-disable-next-line no-new
-    new QueueSchedulerClass("cpcb-scrape-jobs", { connection });
-  } else {
-    console.warn(
-      "⚠️ QueueScheduler not available from bullmq import; repeatable jobs might not be managed automatically.",
-      Object.keys(bullmq)
-    );
-  }
 
   // helper to add repeatable safely
-  const addRepeatable = async (name, cronPattern) => {
+  const addRepeatableToQueue = async (q, name, cronPattern) => {
     const jobId = `repeat-${name}`;
-    // remove existing repeatables with same jobId (best-effort)
     try {
-      const keys = await queue.getRepeatableJobs();
+      const keys = await q.getRepeatableJobs();
       for (const k of keys) {
         if (k.id === jobId) {
-          await queue.removeRepeatableByKey(k.key);
+          await q.removeRepeatableByKey(k.key);
         }
       }
-    } catch (e) {
-      // ignore
-    }
+    } catch (e) {}
 
-    await queue.add(
-      name,
-      { source: "scheduler" },
-      {
-        jobId,
-        repeat: {
-          cron: cronPattern,
-          tz,
-        },
-        removeOnComplete: 10,
-        removeOnFail: 20,
-      }
-    );
+    await q.add(name, { source: "scheduler" }, {
+      jobId,
+      repeat: { cron: cronPattern, tz },
+      removeOnComplete: 10,
+      removeOnFail: 20,
+    });
   };
 
   // register light jobs
   for (const name of lightJobs) {
-    await addRepeatable(name, lightPattern);
+    await addRepeatableToQueue(lightQueue, name, lightPattern);
   }
-  // register heavy jobs
   for (const name of heavyJobs) {
-    await addRepeatable(name, heavyPattern);
+    await addRepeatableToQueue(heavyQueue, name, heavyPattern);
   }
 
   console.log(`⏰ Registered recurring scrape jobs (light:${lightPattern}, heavy:${heavyPattern}) (${tz})`);

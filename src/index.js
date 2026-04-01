@@ -74,7 +74,11 @@ app.use("/api/epr-cer", scrapeEprCerRoutes);
 
 startNationalWorker();
 if (process.env.USE_REDIS === "true") {
-  startScrapeWorker();
+  // start two workers: light and heavy
+  // light worker handles quick jobs (epr-certificate, pwp)
+  startScrapeWorker("cpcb-scrape-jobs-light", Number(process.env.SCRAPE_LIGHT_CONCURRENCY) || Number(process.env.SCRAPE_WORKER_CONCURRENCY) || 4);
+  // heavy worker handles long-running jobs (national, pibo, battery) with lower concurrency
+  startScrapeWorker("cpcb-scrape-jobs-heavy", Number(process.env.SCRAPE_HEAVY_CONCURRENCY) || Math.max(1, Math.floor((Number(process.env.SCRAPE_WORKER_CONCURRENCY) || 4) / 2)));
   registerRecurringScrapeJobs();
 } else {
   // Fallback for environments where Redis queue is disabled
