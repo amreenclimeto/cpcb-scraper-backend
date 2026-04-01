@@ -98,13 +98,14 @@ export const getAuditHistoryService = async ({ limit = 10, page = 1, category = 
   // Build snapshot WHERE
   const snapWhere = [];
   const snapParams = [];
+  const tz = process.env.SCRAPE_TIMEZONE || "Asia/Kolkata";
   if (from) {
     snapParams.push(from);
-    snapWhere.push(`created_at >= $${snapParams.length}::date`);
+    snapWhere.push(`DATE(created_at AT TIME ZONE '${tz}') >= $${snapParams.length}::date`);
   }
   if (to) {
     snapParams.push(to);
-    snapWhere.push(`created_at < ($${snapParams.length}::date + INTERVAL '1 day')`);
+    snapWhere.push(`DATE(created_at AT TIME ZONE '${tz}') <= $${snapParams.length}::date`);
   }
   const snapWhereSQL = snapWhere.length ? `WHERE ${snapWhere.join(" AND ")}` : "";
 
