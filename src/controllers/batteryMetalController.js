@@ -3,7 +3,7 @@ import scrapeMetalData, {
   sleep,
   DELAY_BETWEEN_METALS,
 } from "../scraper/metalData.scraper.js";
-import { upsertBatteryProducer } from "../services/Batteryproducer.service.js";
+import { getMetalDashboardService, upsertBatteryProducer } from "../services/Batteryproducer.service.js";
 import { processBatteryMetalTarget } from "../services/Batterymetaltarget.service.js";
 import { enqueueScrapeJob } from "../queue/scrape.queue.js";
 
@@ -58,5 +58,27 @@ export async function scrapeAllMetalsController(req, res) {
   } catch (err) {
     console.error("Scrape failed:", err.message);
     res.status(500).json({ status: "error", message: err.message });
+  }
+}
+
+export async function getMetalDashboardController(req, res) {
+  try {
+    const { page, limit, metal, search } = req.query;
+
+    const result = await getMetalDashboardService({
+      page: parseInt(page) || 1,
+      limit: parseInt(limit) || 10,
+      metal,
+      search
+    });
+
+    res.json({
+      success: true,
+      ...result
+    });
+
+  } catch (err) {
+    console.error("Dashboard error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
   }
 }

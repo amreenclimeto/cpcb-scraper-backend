@@ -7,7 +7,7 @@ import {
   getStatusHistoryController,
   syncEprNational,
 } from "../controllers/eprNational.controller.js";
-import { scrapeAllMetalsController } from "../controllers/batteryMetalController.js";
+import { getMetalDashboardController, scrapeAllMetalsController } from "../controllers/batteryMetalController.js";
 import {
   exportPwpRecords,
   getPwpNewCompaniesController,
@@ -45,5 +45,9 @@ router.get("/pwp/export", exportPwpRecords);
 
 //  ─── Manual trigger ─────────────────────────────────────────────────
 router.get("/battery/scrape-all", scrapeAllMetalsController);
+router.get("/battery/metal-dashboard", getMetalDashboardController);
 
+router.get("/test", (req, res) => {
+  res.send("working");
+});
 export default router;
