@@ -1,5 +1,5 @@
 import pool from "../config/db.config.js";
-
+import { parseStatesParam } from "../utils/helperFun.js";
 
 // GET new companies — cursor based
 export async function getPwpNewCompaniesService() {
@@ -11,14 +11,14 @@ export async function getPwpNewCompaniesService() {
     const cursorResult = await client.query(
       `SELECT last_seen_at, last_total_count
        FROM sync_cursors
-       WHERE cursor_key = 'pwp_new_companies'`
+       WHERE cursor_key = 'pwp_new_companies'`,
     );
 
     const lastSeenAt = cursorResult.rows[0]?.last_seen_at ?? new Date(0);
     const lastTotalCount = cursorResult.rows[0]?.last_total_count ?? 0;
 
     const countResult = await client.query(
-      `SELECT COUNT(*) as total FROM pwp_companies`
+      `SELECT COUNT(*) as total FROM pwp_companies`,
     );
     const currentTotal = parseInt(countResult.rows[0].total);
 
@@ -26,7 +26,7 @@ export async function getPwpNewCompaniesService() {
       `SELECT * FROM pwp_companies
        WHERE first_seen_at > $1
        ORDER BY first_seen_at ASC`,
-      [lastSeenAt]
+      [lastSeenAt],
     );
 
     if (rows.length > 0) {
@@ -34,7 +34,7 @@ export async function getPwpNewCompaniesService() {
         `UPDATE sync_cursors
          SET last_seen_at = NOW(), last_total_count = $1
          WHERE cursor_key = 'pwp_new_companies'`,
-        [currentTotal]
+        [currentTotal],
       );
     }
 
@@ -46,7 +46,6 @@ export async function getPwpNewCompaniesService() {
       newCount: rows.length,
       data: rows,
     };
-
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
@@ -72,7 +71,7 @@ export async function getPwpStatusChangesService() {
      JOIN pwp_companies p ON p.company_id = h.company_id
      WHERE DATE(h.changed_at) = CURRENT_DATE
      AND h.old_status IS NOT NULL
-     ORDER BY h.changed_at DESC`
+     ORDER BY h.changed_at DESC`,
   );
 
   return rows;
@@ -84,9 +83,10 @@ export const getPwpRecordsService = async ({
   is_active,
   is_new,
   search,
-  date,        // 🔥 single date
-  from_date,   // 🔥 range start
-  to_date,     // 🔥 range end
+  states,
+  date,
+  from_date,
+  to_date,
 }) => {
   const client = await pool.connect();
 
@@ -121,6 +121,18 @@ export const getPwpRecordsService = async ({
       index++;
     }
 
+    //state wise filter
+    const stateList = parseStatesParam(states);
+
+    if (stateList.length > 0) {
+      conditions.push(`
+    UPPER(TRIM(state)) = ANY(
+      SELECT UPPER(unnest($${index++}::text[]))
+    )
+  `);
+
+      values.push(stateList);
+    }
     // =========================
     // 🔥 DATE FILTER LOGIC
     // =========================
@@ -133,7 +145,9 @@ export const getPwpRecordsService = async ({
 
     // ✅ Range filter
     else if (from_date && to_date) {
-      conditions.push(`DATE(first_seen_at) BETWEEN $${index++} AND $${index++}`);
+      conditions.push(
+        `DATE(first_seen_at) BETWEEN $${index++} AND $${index++}`,
+      );
       values.push(from_date, to_date);
     }
 
@@ -171,7 +185,6 @@ export const getPwpRecordsService = async ({
       limit: Number(limit),
       records: dataResult.rows,
     };
-
   } catch (err) {
     throw err;
   } finally {
@@ -183,6 +196,7 @@ export const exportPwpRecordsService = async ({
   is_active,
   is_new,
   search,
+  states,
   from_date,
   to_date,
 }) => {
@@ -214,8 +228,22 @@ export const exportPwpRecordsService = async ({
       index++;
     }
 
+    const stateList = parseStatesParam(states);
+
+    if (stateList.length > 0) {
+      conditions.push(`
+    UPPER(TRIM(state)) = ANY(
+      SELECT UPPER(unnest($${index++}::text[]))
+    )
+  `);
+
+      values.push(stateList);
+    }
+
     if (from_date && to_date) {
-      conditions.push(`DATE(first_seen_at) BETWEEN $${index++} AND $${index++}`);
+      conditions.push(
+        `DATE(first_seen_at) BETWEEN $${index++} AND $${index++}`,
+      );
       values.push(from_date, to_date);
     }
 
@@ -232,7 +260,6 @@ export const exportPwpRecordsService = async ({
     const result = await client.query(query, values);
 
     return result.rows;
-
   } catch (err) {
     throw err;
   } finally {
