@@ -64,22 +64,34 @@ export const getStats = async (req, res) => {
 // Query params:
 //   entity_type = "Brand Owner" | "Producer" | "Importer"
 //   is_new      = "true" | "false"
+//   states      = "Maharashtra" | "Maharashtra,Tamil Nadu" | states[]=... (PWP जैसा)
 //   page        = 1
 //   limit       = 50
 export const getRecords = async (req, res) => {
   try {
-const { entity_type, is_new, page, limit, date, from_date, to_date, search } = req.query;
+    const {
+      entity_type,
+      is_new,
+      page,
+      limit,
+      date,
+      from_date,
+      to_date,
+      search,
+      states,
+    } = req.query;
 
-const data = await getPiboRecords({
-  entity_type,
-  is_new,
-  page,
-  limit,
-  date,
-  from_date,
-  to_date,
-  search, // ✅ add this
-});
+    const data = await getPiboRecords({
+      entity_type,
+      is_new,
+      page,
+      limit,
+      date,
+      from_date,
+      to_date,
+      search,
+      states,
+    });
 
     res.json({ status: "success", data });
   } catch (err) {

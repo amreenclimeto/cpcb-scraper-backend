@@ -20,7 +20,7 @@ router.post("/scrape", triggerScrape);
 router.get("/stats", getStats);
 
 // ─── Records ──────────────────────────────────────────────────────────────────
-// GET /api/pibo/records?entity_type=Brand Owner&is_new=true&page=1&limit=50
+// GET /api/pibo/records?entity_type=Brand Owner&states=Maharashtra,Tamil Nadu&page=1&limit=50
 router.get("/records", getRecords);
 
 // ─── Mark Seen ────────────────────────────────────────────────────────────────

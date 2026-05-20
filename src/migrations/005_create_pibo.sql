@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS pibo_companies (
   company_id     INTEGER UNIQUE NOT NULL,
   company        TEXT,
   address        TEXT,
+  state          TEXT,
   email          TEXT,
   entity_type    VARCHAR(50)  NOT NULL,  -- 'Brand Owner' | 'Producer' | 'Importer'
   status         VARCHAR(50)  NOT NULL,  -- 'Registered' (fixed for now)
@@ -35,4 +36,5 @@ CREATE TABLE IF NOT EXISTS pibo_baseline (
 CREATE INDEX IF NOT EXISTS idx_pibo_entity_type  ON pibo_companies(entity_type);
 CREATE INDEX IF NOT EXISTS idx_pibo_status       ON pibo_companies(status);
 CREATE INDEX IF NOT EXISTS idx_pibo_is_new       ON pibo_companies(is_new);
+CREATE INDEX IF NOT EXISTS idx_pibo_state        ON pibo_companies(state);
 CREATE INDEX IF NOT EXISTS idx_pibo_history_cid  ON pibo_status_history(company_id);

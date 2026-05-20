@@ -1,4 +1,34 @@
 import pool from "../config/db.config.js";
+import { extractState } from "../utils/extractState.js";
+import { parseStatesParam } from "../utils/helperFun.js";
+
+/** DB में state खाली हो तो response में address से derive करो */
+function resolvedState(row) {
+  if (row.state != null && String(row.state).trim() !== "") return row.state;
+  return extractState(row.address);
+}
+
+/** PWP registered जैसा single/multi state filter (DB column + address fallback) */
+function appendStateFilter(stateList, conditions, values, idx) {
+  if (!stateList.length) return idx;
+
+  const parts = [
+    `UPPER(TRIM(COALESCE(state, ''))) = ANY(
+      SELECT UPPER(unnest($${idx}::text[]))
+    )`,
+  ];
+  values.push(stateList.map((s) => s.toUpperCase().trim()));
+  idx++;
+
+  for (const s of stateList) {
+    parts.push(`address ILIKE $${idx}`);
+    values.push(`%${s}%`);
+    idx++;
+  }
+
+  conditions.push(`(${parts.join(" OR ")})`);
+  return idx;
+}
 
 // ─── Save scraped data to DB ──────────────────────────────────────────────────
 export const savePiboData = async (rows, entityType, status) => {
@@ -41,14 +71,23 @@ export const savePiboData = async (rows, entityType, status) => {
 
         await client.query(
           `INSERT INTO pibo_companies
-            (company_id, company, address, email, entity_type, status,
+            (company_id, company, address, state, email, entity_type, status,
              is_new, first_seen_at, last_seen_at, synced_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW(), NOW())
-           ON CONFLICT (company_id) DO NOTHING`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW(), NOW())
+           ON CONFLICT (company_id) DO UPDATE SET
+             company = EXCLUDED.company,
+             address = EXCLUDED.address,
+             state = EXCLUDED.state,
+             email = COALESCE(EXCLUDED.email, pibo_companies.email),
+             entity_type = EXCLUDED.entity_type,
+             status = EXCLUDED.status,
+             last_seen_at = NOW(),
+             synced_at = NOW()`,
           [
             id,
             item.company,
             item.address,
+            extractState(item.address),
             item.email !== "***" ? item.email : null,
             entityType,
             status,
@@ -75,17 +114,18 @@ export const savePiboData = async (rows, entityType, status) => {
 
         await client.query(
           `UPDATE pibo_companies
-           SET status = $2, last_seen_at = NOW(), synced_at = NOW()
-           WHERE company_id = $1 AND entity_type = $3`,
-          [id, status, entityType],
+           SET status = $2, address = $3, state = $4,
+               last_seen_at = NOW(), synced_at = NOW()
+           WHERE company_id = $1 AND entity_type = $5`,
+          [id, status, item.address, extractState(item.address), entityType],
         );
       } else {
-        // ─── No change — sirf timestamp update ───────────────────────────
         await client.query(
           `UPDATE pibo_companies
-           SET last_seen_at = NOW(), synced_at = NOW()
+           SET address = $3, state = $4,
+               last_seen_at = NOW(), synced_at = NOW()
            WHERE company_id = $1 AND entity_type = $2`,
-          [id, entityType],
+          [id, entityType, item.address, extractState(item.address)],
         );
       }
     }
@@ -160,6 +200,7 @@ export const getPiboRecords = async ({
   from_date,
   to_date,
   search,
+  states,
 }) => {
   const conditions = [`status = 'Registered'`];
   const values = [];
@@ -176,17 +217,19 @@ export const getPiboRecords = async ({
   }
 
   if (search && search.trim()) {
-    // ✅ Don't strip special chars — use a single phrase match instead
     const trimmed = search.trim();
 
     conditions.push(`(
     company ILIKE $${idx}
     OR address ILIKE $${idx}
+    OR state ILIKE $${idx}
     OR entity_type ILIKE $${idx}
   )`);
     values.push(`%${trimmed}%`);
     idx++;
   }
+
+  idx = appendStateFilter(parseStatesParam(states), conditions, values, idx);
 
   // ✅ Date filters
   if (date) {
@@ -208,7 +251,7 @@ export const getPiboRecords = async ({
       filterValues, // ✅ only filter params
     ),
     pool.query(
-      `SELECT company_id, company, address, entity_type,
+      `SELECT company_id, company, address, state, entity_type,
             status, is_new, first_seen_at, synced_at
      FROM pibo_companies
      WHERE ${where}
@@ -221,7 +264,10 @@ export const getPiboRecords = async ({
     total: Number(countResult.rows[0].count),
     page: Number(page),
     limit: Number(limit),
-    records: dataResult.rows,
+    records: dataResult.rows.map((row) => ({
+      ...row,
+      state: resolvedState(row),
+    })),
   };
 };
 
@@ -265,6 +311,7 @@ export const exportPiboRecords = async ({
   from_date,
   to_date,
   search,
+  states,
 }) => {
   const conditions = [`status = 'Registered'`];
   const values = [];
@@ -286,11 +333,14 @@ export const exportPiboRecords = async ({
     conditions.push(`(
       company ILIKE $${idx}
       OR address ILIKE $${idx}
+      OR state ILIKE $${idx}
       OR entity_type ILIKE $${idx}
     )`);
     values.push(`%${trimmed}%`);
     idx++;
   }
+
+  idx = appendStateFilter(parseStatesParam(states), conditions, values, idx);
 
   if (date) {
     conditions.push(`DATE(first_seen_at) = $${idx++}`);
@@ -303,7 +353,7 @@ export const exportPiboRecords = async ({
   const where = conditions.join(" AND ");
 
   const result = await pool.query(
-    `SELECT company_id, company, address, entity_type,
+    `SELECT company_id, company, address, state, entity_type,
             status, is_new, first_seen_at
      FROM pibo_companies
      WHERE ${where}
@@ -311,5 +361,8 @@ export const exportPiboRecords = async ({
     values,
   );
 
-  return result.rows;
+  return result.rows.map((row) => ({
+    ...row,
+    state: resolvedState(row),
+  }));
 };
