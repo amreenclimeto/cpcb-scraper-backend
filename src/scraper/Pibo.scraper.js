@@ -1,5 +1,6 @@
 import { chromium } from "playwright";
 import pool from "../config/db.config.js";
+import { extractState } from "../utils/extractState.js";
 
 process.on("unhandledRejection", (reason) => {
   console.error("⚠️ Unhandled rejection:", reason?.message || reason);
@@ -415,17 +416,28 @@ async function savePiboData(rows, entityType, status) {
           missingIds.push(id); // track karo
         }
 
+        const state = extractState(item.address);
+
         const result = await client.query(
           `INSERT INTO pibo_companies
-            (company_id, company, address, email, entity_type, status,
+            (company_id, company, address, state, email, entity_type, status,
              is_new, first_seen_at, last_seen_at, synced_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW(), NOW())
-           ON CONFLICT (company_id, entity_type) DO NOTHING
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW(), NOW())
+           ON CONFLICT (company_id) DO UPDATE SET
+             company = EXCLUDED.company,
+             address = EXCLUDED.address,
+             state = EXCLUDED.state,
+             email = COALESCE(EXCLUDED.email, pibo_companies.email),
+             entity_type = EXCLUDED.entity_type,
+             status = EXCLUDED.status,
+             last_seen_at = NOW(),
+             synced_at = NOW()
            RETURNING company_id`,
           [
             id,
             item.company,
             item.address,
+            state,
             item.email !== "***" ? item.email : null,
             entityType,
             status,
@@ -459,16 +471,18 @@ async function savePiboData(rows, entityType, status) {
 
         await client.query(
           `UPDATE pibo_companies
-           SET status = $2, last_seen_at = NOW(), synced_at = NOW()
-           WHERE company_id = $1 AND entity_type = $3`,
-          [id, status, entityType],
+           SET status = $2, address = $3, state = $4,
+               last_seen_at = NOW(), synced_at = NOW()
+           WHERE company_id = $1 AND entity_type = $5`,
+          [id, status, item.address, extractState(item.address), entityType],
         );
       } else {
         await client.query(
           `UPDATE pibo_companies
-           SET last_seen_at = NOW(), synced_at = NOW()
+           SET address = $3, state = $4,
+               last_seen_at = NOW(), synced_at = NOW()
            WHERE company_id = $1 AND entity_type = $2`,
-          [id, entityType],
+          [id, entityType, item.address, extractState(item.address)],
         );
       }
 
