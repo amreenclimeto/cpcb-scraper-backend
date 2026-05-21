@@ -62,7 +62,7 @@ export const runEprScraper = async () => {
 
       const generatedDiff = prev ? item.generated - prev.generated : 0;
       const transferredDiff = prev ? item.transferred - prev.transferred : 0;
-      const availableDiff = prev ? item.available - prev.available : 0;
+      const availableDiff = generatedDiff - transferredDiff;
 
       await client.query(
         `INSERT INTO epr_pwp_cer_deltas 
@@ -177,6 +177,70 @@ export const getAuditHistoryService = async ({ limit = 10, page = 1, category = 
   // Sort newest-first
   let data = Object.values(snapshotMap).sort((a, b) => new Date(b.time) - new Date(a.time));
 
+  // Attach chronologically previous snapshot values and recompute diffs for display
+  for (const snap of data) {
+    const prevSnapRes = await db.query(
+      `SELECT id, created_at FROM epr_pwp_cer_snapshots
+       WHERE created_at < $1::timestamptz
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [snap.time]
+    );
+    if (!prevSnapRes.rows.length) {
+      snap.data = snap.data.map((c) => ({
+        ...c,
+        prev_generated: null,
+        prev_transferred: null,
+        prev_available: null,
+        generated_diff: 0,
+        transferred_diff: 0,
+        available_diff: 0,
+      }));
+      continue;
+    }
+    const prevDetails = await db.query(
+      `SELECT category, generated, transferred, available
+       FROM epr_pwp_cer_snapshot_details
+       WHERE snapshot_id = $1`,
+      [prevSnapRes.rows[0].id]
+    );
+    const prevMap = {};
+    prevDetails.rows.forEach((r) => {
+      prevMap[r.category] = {
+        generated: Number(r.generated),
+        transferred: Number(r.transferred),
+        available: Number(r.available),
+      };
+    });
+    snap.prev_snapshot_id = prevSnapRes.rows[0].id;
+    snap.prev_time = prevSnapRes.rows[0].created_at;
+    snap.data = snap.data.map((c) => {
+      const prev = prevMap[c.category];
+      if (!prev) {
+        return {
+          ...c,
+          prev_generated: null,
+          prev_transferred: null,
+          prev_available: null,
+          generated_diff: 0,
+          transferred_diff: 0,
+          available_diff: 0,
+        };
+      }
+      const generatedDiff = Number(c.generated) - prev.generated;
+      const transferredDiff = Number(c.transferred) - prev.transferred;
+      return {
+        ...c,
+        prev_generated: prev.generated,
+        prev_transferred: prev.transferred,
+        prev_available: prev.available,
+        generated_diff: generatedDiff,
+        transferred_diff: transferredDiff,
+        available_diff: generatedDiff - transferredDiff,
+      };
+    });
+  }
+
   // If prevIntervalHours requested, compute interval diffs (uses per-snapshot DB lookup)
   if (prevIntervalHours && Number(prevIntervalHours) > 0) {
     const intervalMs = Number(prevIntervalHours) * 60 * 60 * 1000;
@@ -228,7 +292,8 @@ export const getAuditHistoryService = async ({ limit = 10, page = 1, category = 
           prev_available_interval: prevAvail,
           generated_diff_interval: Number(c.generated) - prevGen,
           transferred_diff_interval: Number(c.transferred) - prevTrans,
-          available_diff_interval: Number(c.available) - prevAvail,
+          available_diff_interval:
+            Number(c.generated) - prevGen - (Number(c.transferred) - prevTrans),
         };
       });
     }
