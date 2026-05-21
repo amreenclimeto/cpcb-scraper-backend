@@ -88,14 +88,7 @@ export const runEprScraper = async () => {
   }
 };
 
-// ─────────────────────────────────────────────
-// Get all snapshots grouped — for time-series chart
-// params: { limit, category }
-// ─────────────────────────────────────────────
-export const getAuditHistoryService = async ({ limit = 10, page = 1, category = null, from = null, to = null, prevIntervalHours = 0 }) => {
-  const offset = (page - 1) * limit;
-
-  // Build snapshot WHERE
+function buildSnapshotDateFilter({ from, to }) {
   const snapWhere = [];
   const snapParams = [];
   const tz = process.env.SCRAPE_TIMEZONE || "Asia/Kolkata";
@@ -108,8 +101,78 @@ export const getAuditHistoryService = async ({ limit = 10, page = 1, category = 
     snapWhere.push(`DATE(created_at AT TIME ZONE '${tz}') <= $${snapParams.length}::date`);
   }
   const snapWhereSQL = snapWhere.length ? `WHERE ${snapWhere.join(" AND ")}` : "";
+  return { snapWhereSQL, snapParams, tz };
+}
 
-  // Count total
+const FILTERED_SNAPS_CTE = (snapWhereSQL) => `
+  WITH filtered_snaps AS (
+    SELECT id, created_at,
+      LAG(id) OVER (ORDER BY created_at ASC) AS prev_snapshot_id
+    FROM epr_pwp_cer_snapshots
+    ${snapWhereSQL}
+  )`;
+
+async function queryAuditGrandTotals({ category, from, to, onlyChanged = false }) {
+  const { snapWhereSQL, snapParams } = buildSnapshotDateFilter({ from, to });
+  const params = [...snapParams];
+  let categorySQL = "";
+  if (category) {
+    params.push(category);
+    categorySQL = `AND s.category = $${params.length}`;
+  }
+  let onlyChangedSQL = "";
+  if (onlyChanged) {
+    onlyChangedSQL = `AND (
+      COALESCE(s.generated - p.generated, 0) != 0
+      OR COALESCE(s.transferred - p.transferred, 0) != 0
+    )`;
+  }
+
+  const result = await db.query(
+    `${FILTERED_SNAPS_CTE(snapWhereSQL)},
+    diff_rows AS (
+      SELECT
+        COALESCE(s.generated - p.generated, 0) AS generated_diff,
+        COALESCE(s.transferred - p.transferred, 0) AS transferred_diff
+      FROM filtered_snaps fs
+      JOIN epr_pwp_cer_snapshot_details s ON s.snapshot_id = fs.id
+      LEFT JOIN epr_pwp_cer_snapshot_details p
+        ON p.snapshot_id = fs.prev_snapshot_id AND p.category = s.category
+      WHERE 1=1 ${categorySQL} ${onlyChangedSQL}
+    )
+    SELECT
+      COALESCE(SUM(generated_diff), 0)::bigint AS generated,
+      COALESCE(SUM(transferred_diff), 0)::bigint AS transferred,
+      COALESCE(SUM(generated_diff - transferred_diff), 0)::bigint AS available
+    FROM diff_rows`,
+    params
+  );
+
+  const row = result.rows[0] || {};
+  return {
+    generated: Number(row.generated) || 0,
+    transferred: Number(row.transferred) || 0,
+    available: Number(row.available) || 0,
+  };
+}
+
+// ─────────────────────────────────────────────
+// Get all snapshots grouped — for time-series chart
+// params: { limit, category }
+// ─────────────────────────────────────────────
+export const getAuditHistoryService = async ({
+  limit = 10,
+  page = 1,
+  category = null,
+  from = null,
+  to = null,
+  prevIntervalHours = 0,
+  onlyChanged = false,
+  includeTotals = true,
+}) => {
+  const offset = (page - 1) * limit;
+  const { snapWhereSQL, snapParams } = buildSnapshotDateFilter({ from, to });
+
   const countResult = await db.query(
     `SELECT COUNT(*) AS total FROM epr_pwp_cer_snapshots ${snapWhereSQL}`,
     snapParams
@@ -117,42 +180,61 @@ export const getAuditHistoryService = async ({ limit = 10, page = 1, category = 
   const total = parseInt(countResult.rows[0].total);
   const totalPages = Math.ceil(total / limit);
   if (total === 0) {
-    return { total: 0, totalPages: 0, currentPage: page, limit, data: [] };
+    return {
+      total: 0,
+      totalPages: 0,
+      currentPage: page,
+      limit,
+      data: [],
+      grandTotals: { generated: 0, transferred: 0, available: 0 },
+    };
   }
 
-  // Fetch paginated snapshot IDs
-  const paginatedParams = [...snapParams, limit, offset];
-  const snapshots = await db.query(
-    `SELECT id, created_at FROM epr_pwp_cer_snapshots ${snapWhereSQL} ORDER BY created_at DESC LIMIT $${paginatedParams.length - 1} OFFSET $${paginatedParams.length}`,
-    paginatedParams
-  );
-
-  if (!snapshots.rows.length) {
-    return { total, totalPages, currentPage: page, limit, data: [] };
+  const pageParams = [...snapParams, limit, offset];
+  let categorySQL = "";
+  if (category) {
+    pageParams.push(category);
+    categorySQL = `AND s.category = $${pageParams.length}`;
   }
 
-  const snapshotIds = snapshots.rows.map((s) => s.id);
+  const pageLimitIdx = snapParams.length + 1;
+  const pageOffsetIdx = snapParams.length + 2;
 
-  // Build detail query
-  const detailParams = [snapshotIds];
-  const catSQL = category ? (() => { detailParams.push(category); return `AND s.category = $${detailParams.length}`; })() : "";
+  const [rows, grandTotals] = await Promise.all([
+    db.query(
+      `${FILTERED_SNAPS_CTE(snapWhereSQL)},
+      page AS (
+        SELECT id, created_at, prev_snapshot_id
+        FROM filtered_snaps
+        ORDER BY created_at DESC
+        LIMIT $${pageLimitIdx} OFFSET $${pageOffsetIdx}
+      )
+      SELECT
+        page.id AS snapshot_id,
+        page.created_at AS snapshot_time,
+        s.category,
+        s.generated,
+        s.transferred,
+        s.available,
+        p.generated AS prev_generated,
+        p.transferred AS prev_transferred,
+        p.available AS prev_available,
+        COALESCE(s.generated - p.generated, 0) AS generated_diff,
+        COALESCE(s.transferred - p.transferred, 0) AS transferred_diff,
+        COALESCE(s.generated - p.generated, 0) - COALESCE(s.transferred - p.transferred, 0) AS available_diff
+      FROM page
+      JOIN epr_pwp_cer_snapshot_details s ON s.snapshot_id = page.id
+      LEFT JOIN epr_pwp_cer_snapshot_details p
+        ON p.snapshot_id = page.prev_snapshot_id AND p.category = s.category
+      WHERE 1=1 ${categorySQL}
+      ORDER BY page.created_at DESC, s.category`,
+      pageParams
+    ),
+    includeTotals
+      ? queryAuditGrandTotals({ category, from, to, onlyChanged })
+      : Promise.resolve(null),
+  ]);
 
-  const rows = await db.query(
-    `SELECT s.snapshot_id, s.category, s.generated, s.transferred, s.available,
-            COALESCE(d.generated_diff, 0) AS generated_diff,
-            COALESCE(d.transferred_diff, 0) AS transferred_diff,
-            COALESCE(d.available_diff, 0) AS available_diff,
-            snap.created_at AS snapshot_time
-     FROM epr_pwp_cer_snapshot_details s
-     LEFT JOIN epr_pwp_cer_deltas d ON s.snapshot_id = d.snapshot_id AND s.category = d.category
-     JOIN epr_pwp_cer_snapshots snap ON s.snapshot_id = snap.id
-     WHERE s.snapshot_id = ANY($1)
-     ${catSQL}
-     ORDER BY snap.created_at ASC, s.category`,
-    detailParams
-  );
-
-  // Group by snapshot
   const snapshotMap = {};
   for (const row of rows.rows) {
     const key = row.snapshot_id;
@@ -168,77 +250,29 @@ export const getAuditHistoryService = async ({ limit = 10, page = 1, category = 
       generated: Number(row.generated),
       transferred: Number(row.transferred),
       available: Number(row.available),
+      prev_generated: row.prev_generated != null ? Number(row.prev_generated) : null,
+      prev_transferred: row.prev_transferred != null ? Number(row.prev_transferred) : null,
+      prev_available: row.prev_available != null ? Number(row.prev_available) : null,
       generated_diff: Number(row.generated_diff),
       transferred_diff: Number(row.transferred_diff),
       available_diff: Number(row.available_diff),
     });
   }
 
-  // Sort newest-first
   let data = Object.values(snapshotMap).sort((a, b) => new Date(b.time) - new Date(a.time));
 
-  // Attach chronologically previous snapshot values and recompute diffs for display
-  for (const snap of data) {
-    const prevSnapRes = await db.query(
-      `SELECT id, created_at FROM epr_pwp_cer_snapshots
-       WHERE created_at < $1::timestamptz
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [snap.time]
-    );
-    if (!prevSnapRes.rows.length) {
-      snap.data = snap.data.map((c) => ({
-        ...c,
-        prev_generated: null,
-        prev_transferred: null,
-        prev_available: null,
-        generated_diff: 0,
-        transferred_diff: 0,
-        available_diff: 0,
-      }));
-      continue;
-    }
-    const prevDetails = await db.query(
-      `SELECT category, generated, transferred, available
-       FROM epr_pwp_cer_snapshot_details
-       WHERE snapshot_id = $1`,
-      [prevSnapRes.rows[0].id]
-    );
-    const prevMap = {};
-    prevDetails.rows.forEach((r) => {
-      prevMap[r.category] = {
-        generated: Number(r.generated),
-        transferred: Number(r.transferred),
-        available: Number(r.available),
-      };
-    });
-    snap.prev_snapshot_id = prevSnapRes.rows[0].id;
-    snap.prev_time = prevSnapRes.rows[0].created_at;
-    snap.data = snap.data.map((c) => {
-      const prev = prevMap[c.category];
-      if (!prev) {
-        return {
-          ...c,
-          prev_generated: null,
-          prev_transferred: null,
-          prev_available: null,
-          generated_diff: 0,
-          transferred_diff: 0,
-          available_diff: 0,
-        };
-      }
-      const generatedDiff = Number(c.generated) - prev.generated;
-      const transferredDiff = Number(c.transferred) - prev.transferred;
-      return {
-        ...c,
-        prev_generated: prev.generated,
-        prev_transferred: prev.transferred,
-        prev_available: prev.available,
-        generated_diff: generatedDiff,
-        transferred_diff: transferredDiff,
-        available_diff: generatedDiff - transferredDiff,
-      };
-    });
+  if (onlyChanged) {
+    data = data
+      .map((snap) => ({
+        ...snap,
+        data: snap.data.filter(
+          (c) =>
+            c.generated_diff !== 0 ||
+            c.transferred_diff !== 0 ||
+            c.available_diff !== 0
+        ),
+      }))
+      .filter((snap) => snap.data.length > 0);
   }
 
   // If prevIntervalHours requested, compute interval diffs (uses per-snapshot DB lookup)
@@ -299,7 +333,14 @@ export const getAuditHistoryService = async ({ limit = 10, page = 1, category = 
     }
   }
 
-  return { total, totalPages, currentPage: page, limit, data };
+  return {
+    total,
+    totalPages,
+    currentPage: page,
+    limit,
+    data,
+    grandTotals: grandTotals ?? { generated: 0, transferred: 0, available: 0 },
+  };
 };
 
 // ══ Service ═══════════════════════════════════════════════════════════════════

@@ -71,6 +71,8 @@ export const getAuditHistoryController = async (req, res) => {
     const from     = req.query.from || null;
     const to       = req.query.to || null;
     const prevHours = req.query.prev_hours ? Number(req.query.prev_hours) : 0;
+    const onlyChanged = req.query.only_changed === "true";
+    const includeTotals = req.query.include_totals !== "false";
 
     const result = await getAuditHistoryService({
       limit,
@@ -79,6 +81,8 @@ export const getAuditHistoryController = async (req, res) => {
       from,
       to,
       prevIntervalHours: prevHours,
+      onlyChanged,
+      includeTotals,
     });
 
     res.json({
@@ -88,6 +92,7 @@ export const getAuditHistoryController = async (req, res) => {
       current_page: result.currentPage,
       limit: result.limit,
       data: result.data,
+      grand_totals: result.grandTotals,
     });
   } catch (error) {
     console.error("❌ getAuditHistoryController:", error);
