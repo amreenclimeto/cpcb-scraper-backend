@@ -14,7 +14,11 @@ export const triggerScrape = async (req, res) => {
     console.log("🚀 Manual PIBO scrape triggered");
 
     if (process.env.USE_REDIS === "true") {
-      const job = await enqueueScrapeJob("pibo", { source: "api" });
+      const job = await enqueueScrapeJob(
+        "pibo",
+        { source: "api" },
+        "cpcb-scrape-jobs-heavy",
+      );
       return res.status(202).json({
         status: "queued",
         message: "PIBO scrape queued",

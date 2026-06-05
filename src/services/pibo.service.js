@@ -30,21 +30,141 @@ function appendStateFilter(stateList, conditions, values, idx) {
   return idx;
 }
 
+const BATCH_SIZE = 500;
+const SAVE_STATEMENT_TIMEOUT_MS =
+  Number(process.env.PIBO_SAVE_TIMEOUT_MS) || 300000;
+
+function dedupePiboRows(rows) {
+  const map = new Map();
+  for (const row of rows) {
+    const id = Number(row.company_id);
+    if (!id || Number.isNaN(id)) continue;
+    map.set(id, row);
+  }
+  return [...map.values()];
+}
+
+async function batchInsertCompanies(client, batch, entityType, status) {
+  if (!batch.length) return;
+
+  await client.query(
+    `INSERT INTO pibo_companies
+      (company_id, company, address, state, email, entity_type, status,
+       is_new, first_seen_at, last_seen_at, synced_at)
+     SELECT
+       u.company_id, u.company, u.address, u.state, u.email,
+       $7, $8, u.is_new, NOW(), NOW(), NOW()
+     FROM UNNEST(
+       $1::int[], $2::text[], $3::text[], $4::text[], $5::text[], $6::bool[]
+     ) AS u(company_id, company, address, state, email, is_new)
+     ON CONFLICT (company_id) DO UPDATE SET
+       company = EXCLUDED.company,
+       address = EXCLUDED.address,
+       state = EXCLUDED.state,
+       email = COALESCE(EXCLUDED.email, pibo_companies.email),
+       entity_type = EXCLUDED.entity_type,
+       status = EXCLUDED.status,
+       last_seen_at = NOW(),
+       synced_at = NOW()`,
+    [
+      batch.map((r) => r.id),
+      batch.map((r) => r.company),
+      batch.map((r) => r.address),
+      batch.map((r) => r.state),
+      batch.map((r) => r.email),
+      batch.map((r) => r.flagNew),
+      entityType,
+      status,
+    ],
+  );
+}
+
+async function batchUpdateStatusChanges(client, batch, entityType, status) {
+  if (!batch.length) return;
+
+  await client.query(
+    `UPDATE pibo_companies AS p
+     SET status = $4,
+         address = v.address,
+         state = v.state,
+         last_seen_at = NOW(),
+         synced_at = NOW()
+     FROM UNNEST($1::int[], $2::text[], $3::text[])
+       AS v(company_id, address, state)
+     WHERE p.company_id = v.company_id
+       AND p.entity_type = $5`,
+    [
+      batch.map((r) => r.id),
+      batch.map((r) => r.address),
+      batch.map((r) => r.state),
+      status,
+      entityType,
+    ],
+  );
+}
+
+async function batchTouchCompanies(client, batch, entityType) {
+  if (!batch.length) return;
+
+  await client.query(
+    `UPDATE pibo_companies AS p
+     SET address = v.address,
+         state = v.state,
+         last_seen_at = NOW(),
+         synced_at = NOW()
+     FROM UNNEST($1::int[], $2::text[], $3::text[])
+       AS v(company_id, address, state)
+     WHERE p.company_id = v.company_id
+       AND p.entity_type = $4`,
+    [
+      batch.map((r) => r.id),
+      batch.map((r) => r.address),
+      batch.map((r) => r.state),
+      entityType,
+    ],
+  );
+}
+
+async function batchInsertHistory(client, batch, entityType) {
+  if (!batch.length) return;
+
+  await client.query(
+    `INSERT INTO pibo_status_history (company_id, entity_type, old_status, new_status)
+     SELECT u.company_id, $4, u.old_status, u.new_status
+     FROM UNNEST($1::int[], $2::text[], $3::text[])
+       AS u(company_id, old_status, new_status)`,
+    [
+      batch.map((r) => r.id),
+      batch.map((r) => r.oldStatus),
+      batch.map((r) => r.newStatus),
+      entityType,
+    ],
+  );
+}
+
 // ─── Save scraped data to DB ──────────────────────────────────────────────────
 export const savePiboData = async (rows, entityType, status) => {
   const client = await pool.connect();
+  const deduped = dedupePiboRows(rows);
+
+  if (deduped.length < rows.length) {
+    console.log(
+      `🔍 [${entityType}] Deduped API rows: ${rows.length} → ${deduped.length}`,
+    );
+  }
 
   try {
+    await client.query(
+      `SET LOCAL statement_timeout = '${SAVE_STATEMENT_TIMEOUT_MS}ms'`,
+    );
     await client.query("BEGIN");
 
-    // ─── Pehli scrape hai ya nahi check karo ──────────────────────────────
     const baselineResult = await client.query(
       `SELECT baseline_count FROM pibo_baseline WHERE entity_type = $1`,
       [entityType],
     );
     const isFirstScrape = baselineResult.rows.length === 0;
 
-    // ─── Existing records load karo (sirf is entity ke) ───────────────────
     const existing = await client.query(
       `SELECT company_id, status FROM pibo_companies WHERE entity_type = $1`,
       [entityType],
@@ -55,98 +175,100 @@ export const savePiboData = async (rows, entityType, status) => {
       existingMap.set(Number(r.company_id), r.status),
     );
 
+    const toInsert = [];
+    const toStatusChange = [];
+    const toTouch = [];
+    const historyRows = [];
     let newCompanies = 0;
     let statusChanges = 0;
 
-    for (const item of rows) {
+    for (const item of deduped) {
       const id = Number(item.company_id);
       const oldStatus = existingMap.get(id);
-      const isNew = !existingMap.has(id);
+      const state = extractState(item.address);
+      const email = item.email !== "***" ? item.email : null;
 
-      if (isNew) {
-        // Pehli scrape → is_new = FALSE (ye baseline hai)
-        // Agli scrapes → is_new = TRUE (genuinely naya record)
+      if (!existingMap.has(id)) {
         const flagNew = !isFirstScrape;
         if (flagNew) newCompanies++;
 
-        await client.query(
-          `INSERT INTO pibo_companies
-            (company_id, company, address, state, email, entity_type, status,
-             is_new, first_seen_at, last_seen_at, synced_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW(), NOW())
-           ON CONFLICT (company_id) DO UPDATE SET
-             company = EXCLUDED.company,
-             address = EXCLUDED.address,
-             state = EXCLUDED.state,
-             email = COALESCE(EXCLUDED.email, pibo_companies.email),
-             entity_type = EXCLUDED.entity_type,
-             status = EXCLUDED.status,
-             last_seen_at = NOW(),
-             synced_at = NOW()`,
-          [
-            id,
-            item.company,
-            item.address,
-            extractState(item.address),
-            item.email !== "***" ? item.email : null,
-            entityType,
-            status,
-            flagNew,
-          ],
-        );
-
-        await client.query(
-          `INSERT INTO pibo_status_history
-            (company_id, entity_type, old_status, new_status)
-           VALUES ($1, $2, NULL, $3)`,
-          [id, entityType, status],
-        );
+        toInsert.push({
+          id,
+          company: item.company,
+          address: item.address,
+          state,
+          email,
+          flagNew,
+        });
+        historyRows.push({ id, oldStatus: null, newStatus: status });
       } else if (oldStatus !== status) {
-        // ─── Status change ────────────────────────────────────────────────
         statusChanges++;
-
-        await client.query(
-          `INSERT INTO pibo_status_history
-            (company_id, entity_type, old_status, new_status)
-           VALUES ($1, $2, $3, $4)`,
-          [id, entityType, oldStatus, status],
-        );
-
-        await client.query(
-          `UPDATE pibo_companies
-           SET status = $2, address = $3, state = $4,
-               last_seen_at = NOW(), synced_at = NOW()
-           WHERE company_id = $1 AND entity_type = $5`,
-          [id, status, item.address, extractState(item.address), entityType],
-        );
+        toStatusChange.push({ id, address: item.address, state });
+        historyRows.push({ id, oldStatus, newStatus: status });
       } else {
-        await client.query(
-          `UPDATE pibo_companies
-           SET address = $3, state = $4,
-               last_seen_at = NOW(), synced_at = NOW()
-           WHERE company_id = $1 AND entity_type = $2`,
-          [id, entityType, item.address, extractState(item.address)],
-        );
+        toTouch.push({ id, address: item.address, state });
       }
     }
 
-    // ─── Pehli scrape mein baseline set karo ──────────────────────────────
+    for (let i = 0; i < toInsert.length; i += BATCH_SIZE) {
+      await batchInsertCompanies(
+        client,
+        toInsert.slice(i, i + BATCH_SIZE),
+        entityType,
+        status,
+      );
+    }
+
+    for (let i = 0; i < toStatusChange.length; i += BATCH_SIZE) {
+      await batchUpdateStatusChanges(
+        client,
+        toStatusChange.slice(i, i + BATCH_SIZE),
+        entityType,
+        status,
+      );
+    }
+
+    for (let i = 0; i < toTouch.length; i += BATCH_SIZE) {
+      await batchTouchCompanies(
+        client,
+        toTouch.slice(i, i + BATCH_SIZE),
+        entityType,
+      );
+    }
+
+    for (let i = 0; i < historyRows.length; i += BATCH_SIZE) {
+      await batchInsertHistory(
+        client,
+        historyRows.slice(i, i + BATCH_SIZE),
+        entityType,
+      );
+    }
+
     if (isFirstScrape) {
       await client.query(
         `INSERT INTO pibo_baseline (entity_type, baseline_count, set_at)
          VALUES ($1, $2, NOW())
          ON CONFLICT (entity_type)
          DO UPDATE SET baseline_count = $2, set_at = NOW()`,
-        [entityType, rows.length],
+        [entityType, deduped.length],
       );
-      console.log(`📌 Baseline set for ${entityType}: ${rows.length}`);
+      console.log(`📌 Baseline set for ${entityType}: ${deduped.length}`);
     }
 
     await client.query("COMMIT");
+    console.log(
+      `✅ [${entityType}] Saved ${deduped.length} rows (new: ${newCompanies}, status changes: ${statusChanges})`,
+    );
 
-    return { total: rows.length, newCompanies, statusChanges, isFirstScrape };
+    return {
+      total: deduped.length,
+      newCompanies,
+      statusChanges,
+      isFirstScrape,
+    };
   } catch (err) {
     await client.query("ROLLBACK");
+    console.error(`❌ [${entityType}] DB error, rolled back: ${err.message}`);
     throw err;
   } finally {
     client.release();

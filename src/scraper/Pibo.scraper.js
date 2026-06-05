@@ -1,6 +1,8 @@
 import { chromium } from "playwright";
 import pool from "../config/db.config.js";
-import { extractState } from "../utils/extractState.js";
+import { savePiboData } from "../services/pibo.service.js";
+
+const PIBO_SCRAPE_LOCK_ID = 8392741;
 
 process.on("unhandledRejection", (reason) => {
   console.error("⚠️ Unhandled rejection:", reason?.message || reason);
@@ -20,9 +22,39 @@ const TIMEOUT_MS = {
   Importer: 120000,
 };
 
+async function acquirePiboScrapeLock() {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(
+      "SELECT pg_try_advisory_lock($1) AS acquired",
+      [PIBO_SCRAPE_LOCK_ID],
+    );
+    if (!result.rows[0]?.acquired) {
+      client.release();
+      return null;
+    }
+    return client;
+  } catch (err) {
+    client.release();
+    throw err;
+  }
+}
+
+async function releasePiboScrapeLock(lockClient) {
+  if (!lockClient) return;
+  try {
+    await lockClient.query("SELECT pg_advisory_unlock($1)", [
+      PIBO_SCRAPE_LOCK_ID,
+    ]);
+  } finally {
+    lockClient.release();
+  }
+}
+
 // ─── Main Export ─────────────────────────────────────────────────────────────
 export const scrapeCpcbPiboData = async () => {
   let browser = null;
+  let lockClient = null;
 
   const stats = {
     totalScraped: 0,
@@ -32,6 +64,16 @@ export const scrapeCpcbPiboData = async () => {
   };
 
   try {
+    lockClient = await acquirePiboScrapeLock();
+    if (!lockClient) {
+      console.log("⚠️ PIBO scrape already running — skipping duplicate run");
+      return {
+        success: false,
+        error: "PIBO scrape already in progress",
+        ...stats,
+      };
+    }
+
     console.log("🚀 PIBO scraper starting...");
 
     browser = await chromium.launch({
@@ -244,6 +286,7 @@ export const scrapeCpcbPiboData = async () => {
       await browser.close();
       console.log("🔒 Browser closed");
     }
+    await releasePiboScrapeLock(lockClient);
   }
 };
 
@@ -349,184 +392,3 @@ async function interceptToken(page, entityType) {
   });
 }
 
-async function savePiboData(rows, entityType, status) {
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const baselineResult = await client.query(
-      `SELECT baseline_count FROM pibo_baseline WHERE entity_type = $1`,
-      [entityType],
-    );
-    const isFirstScrape = baselineResult.rows.length === 0;
-
-    const existing = await client.query(
-      `SELECT company_id, status FROM pibo_companies WHERE entity_type = $1`,
-      [entityType],
-    );
-
-    // savePiboData mein ye add karo loop se pehle
-    const apiIds = rows.map((r) => Number(r.company_id));
-    const uniqueApiIds = new Set(apiIds);
-    console.log(
-      `🔍 [${entityType}] API total: ${rows.length}, Unique IDs: ${uniqueApiIds.size}`,
-    );
-
-    // Duplicate IDs find karo
-    const seen = new Set();
-    const duplicates = [];
-    for (const row of rows) {
-      const id = Number(row.company_id);
-      if (seen.has(id)) {
-        duplicates.push(id);
-      }
-      seen.add(id);
-    }
-    console.log(
-      `🔍 [${entityType}] Duplicate IDs in API: ${duplicates.length}`,
-      duplicates.slice(0, 10),
-    );
-
-    const existingMap = new Map();
-    existing.rows.forEach((r) =>
-      existingMap.set(Number(r.company_id), r.status),
-    );
-
-    let newCompanies = 0;
-    let statusChanges = 0;
-    let batchCount = 0;
-
-    // ─── DEBUG TRACKING ───────────────────────────────────
-    let skippedConflict = 0;
-    let inserted = 0;
-    let updated = 0;
-    const missingIds = []; // jo DB mein nahi hain
-    // ──────────────────────────────────────────────────────
-
-    for (const item of rows) {
-      const id = Number(item.company_id);
-      const oldStatus = existingMap.get(id);
-      const isNew = !existingMap.has(id);
-
-      if (isNew) {
-        const flagNew = !isFirstScrape;
-        if (flagNew) {
-          newCompanies++;
-          missingIds.push(id); // track karo
-        }
-
-        const state = extractState(item.address);
-
-        const result = await client.query(
-          `INSERT INTO pibo_companies
-            (company_id, company, address, state, email, entity_type, status,
-             is_new, first_seen_at, last_seen_at, synced_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW(), NOW())
-           ON CONFLICT (company_id) DO UPDATE SET
-             company = EXCLUDED.company,
-             address = EXCLUDED.address,
-             state = EXCLUDED.state,
-             email = COALESCE(EXCLUDED.email, pibo_companies.email),
-             entity_type = EXCLUDED.entity_type,
-             status = EXCLUDED.status,
-             last_seen_at = NOW(),
-             synced_at = NOW()
-           RETURNING company_id`,
-          [
-            id,
-            item.company,
-            item.address,
-            state,
-            item.email !== "***" ? item.email : null,
-            entityType,
-            status,
-            flagNew,
-          ],
-        );
-
-        if (result.rowCount === 0) {
-          skippedConflict++;
-          console.log(
-            `⚠️ [${entityType}] CONFLICT SKIP: company_id=${id}, company=${item.company}`,
-          );
-        } else {
-          inserted++;
-        }
-
-        await client.query(
-          `INSERT INTO pibo_status_history (company_id, entity_type, old_status, new_status)
-           VALUES ($1, $2, NULL, $3)`,
-          [id, entityType, status],
-        );
-      } else if (oldStatus !== status) {
-        statusChanges++;
-        updated++;
-
-        await client.query(
-          `INSERT INTO pibo_status_history (company_id, entity_type, old_status, new_status)
-           VALUES ($1, $2, $3, $4)`,
-          [id, entityType, oldStatus, status],
-        );
-
-        await client.query(
-          `UPDATE pibo_companies
-           SET status = $2, address = $3, state = $4,
-               last_seen_at = NOW(), synced_at = NOW()
-           WHERE company_id = $1 AND entity_type = $5`,
-          [id, status, item.address, extractState(item.address), entityType],
-        );
-      } else {
-        await client.query(
-          `UPDATE pibo_companies
-           SET address = $3, state = $4,
-               last_seen_at = NOW(), synced_at = NOW()
-           WHERE company_id = $1 AND entity_type = $2`,
-          [id, entityType, item.address, extractState(item.address)],
-        );
-      }
-
-      batchCount++;
-      if (batchCount % 5000 === 0) {
-        console.log(
-          `⚡ [${entityType}] DB progress: ${batchCount}/${rows.length} rows`,
-        );
-      }
-    }
-
-    // ─── DEBUG SUMMARY ────────────────────────────────────
-    console.log(`\n📊 [${entityType}] DEBUG SUMMARY:`);
-    console.log(`   → API rows received:  ${rows.length}`);
-    console.log(`   → DB existing:        ${existing.rows.length}`);
-    console.log(`   → Inserted:           ${inserted}`);
-    console.log(`   → Conflict skipped:   ${skippedConflict}`);
-    console.log(`   → Updated:            ${updated}`);
-    console.log(`   → New flagged:        ${newCompanies}`);
-    if (missingIds.length > 0) {
-      console.log(`   → New company_ids:    ${missingIds.join(", ")}`);
-    }
-    // ──────────────────────────────────────────────────────
-
-    if (isFirstScrape) {
-      await client.query(
-        `INSERT INTO pibo_baseline (entity_type, baseline_count, set_at)
-         VALUES ($1, $2, NOW())
-         ON CONFLICT (entity_type)
-         DO UPDATE SET baseline_count = $2, set_at = NOW()`,
-        [entityType, rows.length],
-      );
-      console.log(`📌 [${entityType}] Baseline saved: ${rows.length}`);
-    }
-
-    await client.query("COMMIT");
-    console.log(`✅ [${entityType}] Transaction committed`);
-
-    return { total: rows.length, newCompanies, statusChanges, isFirstScrape };
-  } catch (err) {
-    await client.query("ROLLBACK");
-    console.error(`❌ [${entityType}] DB error, rolled back: ${err.message}`);
-    throw err;
-  } finally {
-    client.release();
-  }
-}
